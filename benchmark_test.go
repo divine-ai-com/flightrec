@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/divine-ai-com/flightrec"
 )
@@ -189,5 +190,32 @@ func BenchmarkFlightRec_OutOfScope_WithAttrs(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		logger.WarnContext(ctx, "background tick", "iter", i)
+	}
+}
+
+// BenchmarkFlightRec_BufferedAndRetained measures a healthy request with 20
+// buffered debug logs kept for Options.Retain instead of discarded.
+func BenchmarkFlightRec_BufferedAndRetained(b *testing.B) {
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+		Retain:        30 * time.Second,
+	})
+	logger := slog.New(rec)
+	baseCtx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		ctx, sc := flightrec.StartScope(baseCtx, rec, flightrec.ScopeMeta{
+			TraceID: "0123456789abcdef0123456789abcdef",
+			Method:  "GET",
+			Path:    "/api/orders",
+		})
+		for j := 0; j < logsPerRequest; j++ {
+			logger.DebugContext(ctx, "db query executed", "table", "orders", "rows", j, "cached", true)
+		}
+		sc.End(ctx, 200)
 	}
 }
