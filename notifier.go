@@ -121,8 +121,8 @@ type notifierHub struct {
 //
 //   - a scope triggered by a local failure announces its trace ID once;
 //     scopes triggered by a downstream marker or a remote notice do not, so
-//     notices cannot echo between services, and generated trace IDs, which
-//     no other process knows, are not announced;
+//     notices cannot echo between services. Generated trace IDs are
+//     announced too, since services forward them to the services they call;
 //   - a notice from another process flushes this process's retained scopes
 //     for that trace (Options.Retain) and triggers its running ones, with
 //     reason "remote:<reason>"; scopes for that trace that start or end
@@ -226,11 +226,11 @@ func (h *notifierHub) scopeRekeyed(sc *Scope, oldID, newID string) {
 }
 
 // scopeEnded removes a scope from the active index.
-func (h *notifierHub) scopeEnded(sc *Scope, traceID string, triggered bool, reason string, generated bool) {
+func (h *notifierHub) scopeEnded(sc *Scope, traceID string, triggered bool, reason string) {
 	h.removeActive(sc, traceID)
 	if triggered {
 		// Status and slow-request triggers are decided at End.
-		h.localTrigger(traceID, reason, generated)
+		h.localTrigger(traceID, reason)
 	}
 }
 
@@ -279,12 +279,13 @@ func (h *notifierHub) activeScopes(traceID string) []*Scope {
 
 // localTrigger announces a locally originated failure once per trace and
 // flushes this process's retained scopes for the same trace.
-func (h *notifierHub) localTrigger(traceID, reason string, generated bool) {
+func (h *notifierHub) localTrigger(traceID, reason string) {
 	if strings.HasPrefix(reason, "remote:") || strings.HasPrefix(reason, "downstream:") {
 		return
 	}
-	if generated || !validTraceID(traceID) {
-		// No other process can know a generated ID.
+	// Generated IDs are announced too: services forward them to the services
+	// they call (X-Request-Id, gRPC metadata), which then know them.
+	if !validTraceID(traceID) {
 		return
 	}
 	value, _ := MarkerValue(reason)

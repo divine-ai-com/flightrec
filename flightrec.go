@@ -682,13 +682,12 @@ func (s *Scope) trigger(reason string) bool {
 		reason = "triggered"
 	}
 	s.mu.Lock()
-	var notify, generated bool
+	var notify bool
 	var tid string
 	if !s.triggered {
 		s.triggered = true
 		s.triggerReason = reason
 		tid = s.meta.TraceID
-		generated = s.generatedTraceID
 		notify = !s.closed
 	}
 	s.mu.Unlock()
@@ -696,7 +695,7 @@ func (s *Scope) trigger(reason string) bool {
 	if notify && s.state != nil {
 		s.state.notifyScopeTrigger(s, tid, reason)
 		if h := s.state.hub.Load(); h != nil {
-			h.localTrigger(tid, reason, generated)
+			h.localTrigger(tid, reason)
 		}
 	}
 	return notify
@@ -941,7 +940,6 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	}
 
 	traceID := s.meta.TraceID
-	generatedID := s.generatedTraceID
 	method := s.meta.Method
 	path := s.meta.Path
 	triggered := s.triggered
@@ -965,7 +963,7 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	}
 	st.activeScopes.Add(-1)
 	if h := st.hub.Load(); h != nil {
-		h.scopeEnded(s, traceID, triggered, reason, generatedID)
+		h.scopeEnded(s, traceID, triggered, reason)
 	}
 
 	scopeTraceBytes, hasScopeTraceBytes := ParseTraceIDHex(traceID)

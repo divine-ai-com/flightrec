@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -285,14 +286,27 @@ func TestNotifierConcurrent(t *testing.T) {
 	}
 }
 
-func TestNotifierDoesNotPublishGeneratedTraceIDs(t *testing.T) {
+// TestNotifierPublishesForwardedGeneratedTraceIDs covers a service that
+// generates the trace ID and forwards it to the services it calls: its
+// failure must reach them.
+func TestNotifierPublishesForwardedGeneratedTraceIDs(t *testing.T) {
 	bus := memnotifier.New()
+	b := newNode(t, bus, flightrec.Options{Retain: time.Minute})
 	c := newNode(t, bus, flightrec.Options{})
-	listening(t, bus, 1)
-	failRequest(c, "") // no trace ID: one is generated
-	time.Sleep(30 * time.Millisecond)
-	if got := c.rec.Stats().NotifierPublished; got != 0 {
-		t.Errorf("NotifierPublished = %d for a generated trace ID, want 0", got)
+	listening(t, bus, 2)
+
+	ctx, sc := flightrec.StartScope(context.Background(), c.rec, flightrec.ScopeMeta{}) // no trace ID: one is generated
+	tid := flightrec.TraceID(ctx)
+	healthyRequest(b.rec, b.log, tid, "b: called with the forwarded ID")
+	c.log.DebugContext(ctx, "failing step")
+	sc.End(ctx, 502)
+
+	eventually(t, "b to flush the retained scope", func() bool { return b.rec.Stats().RemoteFlushes == 1 })
+	if got := c.rec.Stats().NotifierPublished; got != 1 {
+		t.Errorf("NotifierPublished = %d for a generated trace ID, want 1", got)
+	}
+	if !strings.Contains(b.out.String(), "remote:http_502") {
+		t.Errorf("b output lacks remote:http_502:\n%s", b.out.String())
 	}
 }
 
