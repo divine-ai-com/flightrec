@@ -24,7 +24,7 @@ A failed request that lost every buffered record writes one `buffered records dr
 
 ## Trace IDs from requests
 
-The trace ID is taken from the trace already in the request context if there is one (OpenTelemetry middleware or interceptors that run before flightrec, or `Options.TraceExtractor`), so logs, spans and cross-service flush all use the same trace. Either middleware order works with `otelflightrec`: when OpenTelemetry middleware runs inside flightrec's, the server span's trace replaces a generated or `X-Trace-Id`/`X-Request-Id` ID as soon as the span starts. Otherwise it is taken from `traceparent`, then `X-Trace-Id`, then `X-Request-Id`, and finally generated. `traceparent` must be valid as the W3C Trace Context specification defines it (lowercase hex, non-zero IDs). `X-Trace-Id` and `X-Request-Id` values are used only when they are 1 to 128 bytes of letters, digits and `_ . : - / + = @`; otherwise the next source is tried.
+The trace ID is taken from the trace already in the request context if there is one (OpenTelemetry middleware or interceptors that run before flightrec, or `Options.TraceExtractor`), so logs, spans and cross-service flush all use the same trace. Either middleware order works with `otelflightrec`: when OpenTelemetry middleware runs inside flightrec's, the server span's trace replaces a generated or header ID as soon as the span starts, and a header ID stays an alias, so services that forwarded it still match the request for cross-service flush. Otherwise it is taken from `traceparent`, then `X-Trace-Id`, then `X-Request-Id`, and finally generated. `traceparent` must be valid as the W3C Trace Context specification defines it (lowercase hex, non-zero IDs). `X-Trace-Id` and `X-Request-Id` values are used only when they are 1 to 128 bytes of letters, digits and `_ . : - / + = @`; otherwise the next source is tried.
 
 A client can choose these headers. On services that receive requests from outside your system, such as a public API, set `IgnoreRequestTraceIDs: true` so trace IDs come only from your own tracing or are generated. The same applies to the `Flightrec-Flush` response header, which `DisableFlushMarker: true` turns off.
 
@@ -55,6 +55,7 @@ slog.Info("flightrec",
 | `flightrec.recovered_scope` | records recovered for a request with no trace ID | Groups the lines of that request |
 | `duration`, `status` (or `grpc.code`), `method`, `path`, `flightrec.dropped_records` | the summary line | Outcome of a healthy request |
 | `flightrec.dropped_spans` | the exported root span of a healthy trace (`otelflightrec`, `HealthyExportRootOnly`) | Child spans dropped because the trace was healthy |
+| `flightrec.request_id` | records and the summary line of a request whose header ID was replaced by its OpenTelemetry span's trace | The request header ID the request arrived with |
 | `flightrec.retained_records` | the summary line, with `Retain` | Records kept for a later remote flush instead of being dropped |
 
 | Trigger | `flightrec.flush_reason` |
