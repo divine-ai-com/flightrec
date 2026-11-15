@@ -19,6 +19,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
 - `examples/cross-service`: three services showing cross-service flush for a synchronous failure (response markers) and an asynchronous one (retention and a notifier), in one process or with Docker Compose and Redis. README section "Keep logs across services" (#46).
 
 ### Fixed
+- Memory accounting no longer adds the size of `Logger.With` attributes to every buffered record. Those attributes live once on the child logger, so `MaxPerScope`, `MaxTotal` and `BufferedBytes` over-counted requests that log through a child logger (#53).
 - An informational response such as `103 Early Hints` no longer becomes the recorded status of the request; the final status is used for the 5xx trigger and the summary line (#47).
 
 ### Security
