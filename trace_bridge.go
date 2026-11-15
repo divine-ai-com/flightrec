@@ -173,27 +173,38 @@ func (s *Scope) TraceID() string {
 
 // AdoptGeneratedTraceID replaces the Scope's trace ID with traceID if the
 // Scope generated a random trace ID because none was present when StartScope
-// was called, or HTTPMiddleware took it from an X-Trace-Id or X-Request-Id
-// header. otelflightrec calls it when the request's server span starts after
-// the scope (OpenTelemetry middleware inside HTTPMiddleware), so logs and
-// spans share the span's trace. It returns the previous trace ID and true
-// when the trace ID was updated.
+// was called, or HTTPMiddleware took it from a request header (traceparent,
+// X-Trace-Id or X-Request-Id). otelflightrec calls it when the request's
+// server span starts after the scope (OpenTelemetry middleware inside
+// HTTPMiddleware), so logs and spans share the span's trace. A header ID is
+// kept as an alias: a notifier notice for it still reaches the scope, and a
+// failure is announced under both IDs, since other services may know the
+// request only by the header. A trace ID set with ScopeMeta.TraceID is never
+// replaced. It returns the previous trace ID and true when the trace ID was
+// updated.
 func (s *Scope) AdoptGeneratedTraceID(traceID string) (string, bool) {
 	if s == nil || traceID == "" {
 		return "", false
 	}
 	s.mu.Lock()
-	if s.closed || !s.adoptableTraceID {
+	if s.closed || s.idSource == idExplicit || s.meta.TraceID == traceID {
+		if s.meta.TraceID == traceID {
+			s.idSource = idExplicit
+		}
 		s.mu.Unlock()
 		return "", false
 	}
 	old := s.meta.TraceID
+	keepAlias := s.idSource == idHeader
 	s.meta.TraceID = traceID
-	s.adoptableTraceID = false
+	s.idSource = idExplicit
+	if keepAlias {
+		s.aliasTraceID = old
+	}
 	s.mu.Unlock()
 	if s.state != nil {
 		if h := s.state.hub.Load(); h != nil {
-			h.scopeRekeyed(s, old, traceID)
+			h.scopeRekeyed(s, old, traceID, keepAlias)
 		}
 	}
 	return old, true

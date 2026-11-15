@@ -180,13 +180,13 @@ func (st *recorderState) recoverJournal(path string) {
 // summary.
 func (st *recorderState) recoverScope(sc *recoveredScope, host string, processStart time.Time) {
 	traceID := sc.start.traceID
-	if traceID == "" {
-		// The start entry was overwritten: take the trace from a record.
-		for _, jr := range sc.records {
-			if jr.traceCtx.HasTraceID() {
-				traceID = jr.traceCtx.TraceIDHex()
-				break
-			}
+	// The records' own trace context wins over the start entry: it reflects
+	// a span's trace adopted after the scope started (Scope.AdoptGeneratedTraceID),
+	// and it survives when the start entry was overwritten.
+	for i := len(sc.records) - 1; i >= 0; i-- {
+		if tc := sc.records[i].traceCtx; tc.HasTraceID() {
+			traceID = tc.TraceIDHex()
+			break
 		}
 	}
 	scopeTrace, hasScopeTrace := ParseTraceIDHex(traceID)

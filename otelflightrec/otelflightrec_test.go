@@ -341,7 +341,11 @@ func TestBothHTTPMiddlewareOrdersCoordinateLogsAndTraces(t *testing.T) {
 		{"flightrec_outer", "lb-req-1"},
 	} {
 		order := tc.order
-		t.Run(order+"/"+tc.requestID, func(t *testing.T) {
+		name := tc.requestID
+		if name == "" {
+			name = "no-header"
+		}
+		t.Run(order+"/"+name, func(t *testing.T) {
 			logBuf := &syncBuffer{}
 			rec := flightrec.New(flightrec.Options{
 				Next:          slog.NewJSONHandler(logBuf, nil),

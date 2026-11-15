@@ -4,8 +4,8 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
-### Fixed
-- With OpenTelemetry middleware inside `HTTPMiddleware`, a scope keyed by an `X-Trace-Id` or `X-Request-Id` header (a proxy's request ID, say) now takes the server span's trace ID when the span starts, as a generated ID already did. Before, its logs and notices kept the header value while its spans used the real trace. `Scope.AdoptGeneratedTraceID` applies to such header IDs too (#96).
+### Changed
+- With OpenTelemetry middleware inside `HTTPMiddleware`, a scope keyed by a request header (`traceparent`, `X-Trace-Id`, `X-Request-Id`) takes the server span's trace ID when the span starts, as a generated ID already did, so logs and spans agree in either middleware order. The header ID stays an alias: notifier notices for it still reach the scope, and failures are announced under both IDs. Crash recovery takes the trace ID from the recovered records when they carry one (#96).
 
 ## [v0.5.0] - 2026-11-15
 

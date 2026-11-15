@@ -21,6 +21,7 @@ const maxRetainedPerTrace = 8
 // retainedScope is the buffer of a healthy scope kept for Options.Retain.
 type retainedScope struct {
 	traceID    string
+	alias      string // a request header ID the scope also answers to
 	entries    []bufferedEntry
 	bytes      int64
 	truncated  bool
@@ -39,10 +40,11 @@ type retainedSet struct {
 }
 
 // retain moves the entries of a healthy scope into the retained set.
-func (st *recorderState) retain(traceID string, entries []bufferedEntry, truncated bool, dropped uint64, now time.Time) {
+func (st *recorderState) retain(traceID, alias string, entries []bufferedEntry, truncated bool, dropped uint64, now time.Time) {
 	snapshotBytes := snapshotAnyValues(entries)
 	rs := &retainedScope{
 		traceID:    traceID,
+		alias:      alias,
 		entries:    entries,
 		truncated:  truncated,
 		dropped:    dropped,
@@ -73,6 +75,9 @@ func (st *recorderState) retain(traceID string, entries []bufferedEntry, truncat
 	}
 	rs.elem = set.order.PushBack(rs)
 	set.byTrace[traceID] = append(set.byTrace[traceID], rs)
+	if alias != "" {
+		set.byTrace[alias] = append(set.byTrace[alias], rs)
+	}
 	set.bytes += rs.bytes
 	for set.bytes > st.opts.MaxRetained && set.order.Len() > 0 {
 		st.dropRetainedLocked(set.order.Front().Value.(*retainedScope), false)
@@ -131,17 +136,22 @@ func (st *recorderState) removeRetainedLocked(rs *retainedScope) {
 	set := &st.retained
 	set.order.Remove(rs.elem)
 	set.bytes -= rs.bytes
-	same := set.byTrace[rs.traceID]
-	for i, other := range same {
-		if other == rs {
-			same = append(same[:i], same[i+1:]...)
-			break
+	for _, key := range []string{rs.traceID, rs.alias} {
+		if key == "" {
+			continue
 		}
-	}
-	if len(same) == 0 {
-		delete(set.byTrace, rs.traceID)
-	} else {
-		set.byTrace[rs.traceID] = same
+		same := set.byTrace[key]
+		for i, other := range same {
+			if other == rs {
+				same = append(same[:i], same[i+1:]...)
+				break
+			}
+		}
+		if len(same) == 0 {
+			delete(set.byTrace, key)
+		} else {
+			set.byTrace[key] = same
+		}
 	}
 }
 
