@@ -8,7 +8,8 @@
 //
 //  1. SpanProcessor (implementing go.opentelemetry.io/otel/sdk/trace.SpanProcessor)
 //     buffers finished child spans per trace in bounded memory and exports them
-//     only when the trace is triggered (by a span error, an exception event, a
+//     only when the trace is triggered (by a span error or exception event,
+//     except a client span whose remote answered with a client error, a
 //     slow trace duration, an explicit flush, or any linked flightrec.Scope
 //     trigger such as an error log, HTTP 5xx, gRPC server fault, or panic).
 //     For healthy traces, SpanProcessor exports either the local root span only
