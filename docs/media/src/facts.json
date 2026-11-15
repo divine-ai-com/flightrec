@@ -1,0 +1,7 @@
+{"proof_sub": "Measured on GitHub runners and in a three-service end-to-end test (docs/e2e-report.md)",
+ "tiles": [["92.5%", "fewer log lines in the\n1,000-request demo"],
+           ["32%", "less CPU per healthy request\nthan always-on debug logs"],
+           ["56%", "less CPU per healthy trace\nthan exporting every span"],
+           ["45 / 45", "in-flight requests recovered\nafter kill -9 under load"],
+           ["105 MB", "flat memory over a 10-minute\nsoak: 180,001 requests"],
+           ["0", "garbled lines in 678,000\nwritten under load"]]}
