@@ -64,8 +64,13 @@ func FuzzNotifierReceive(f *testing.F) {
 	f.Fuzz(func(t *testing.T, msg []byte) {
 		for _, keys := range [][][]byte{nil, {key}} {
 			rec := New(Options{Next: slog.DiscardHandler})
-			h := &notifierHub{st: rec.state, origin: "self", keys: keys, inbox: make(chan notice, notifierQueueSize),
-				received: newRecentSet(notifierRecentSize, notifierRecentTTL, rec.state.now)}
+			h := &notifierHub{
+				st:       rec.state,
+				origin:   "self",
+				keys:     keys,
+				inbox:    make(chan notice, notifierQueueSize),
+				received: newRecentSet(notifierRecentSize, notifierRecentTTL, rec.state.now),
+			}
 			h.receive(msg)
 			for len(h.inbox) > 0 {
 				n := <-h.inbox
