@@ -586,7 +586,7 @@ type Scope struct {
 	truncated         bool
 	evictedByTotalCap bool
 	droppedInScope    uint64
-	generatedTraceID  bool
+	adoptableTraceID  bool // generated, or from X-Trace-Id/X-Request-Id
 
 	// jid and journal are set at StartScope when a journal is running and
 	// never change afterwards.
@@ -606,6 +606,14 @@ type Scope struct {
 //
 // The underlying ring buffer is allocated lazily on the first buffered record.
 func StartScope(ctx context.Context, rec *Recorder, meta ScopeMeta) (context.Context, *Scope) {
+	return startScope(ctx, rec, meta, false)
+}
+
+// startScope is StartScope. adoptable marks a trace ID taken from a request
+// header that is not a W3C traceparent: an OpenTelemetry span that starts
+// later replaces it (Scope.AdoptGeneratedTraceID), as it replaces a
+// generated ID.
+func startScope(ctx context.Context, rec *Recorder, meta ScopeMeta, adoptable bool) (context.Context, *Scope) {
 	st := rec.state
 	if meta.TraceID == "" {
 		if sc := scopeFromContext(ctx); sc != nil {
@@ -614,16 +622,15 @@ func StartScope(ctx context.Context, rec *Recorder, meta ScopeMeta) (context.Con
 			meta.TraceID = tc.TraceIDHex()
 		}
 	}
-	generated := false
 	if meta.TraceID == "" {
 		meta.TraceID = generateTraceID()
-		generated = true
+		adoptable = true
 	}
 	sc := &Scope{
 		state:            st,
 		meta:             meta,
 		startTime:        st.now(),
-		generatedTraceID: generated,
+		adoptableTraceID: adoptable,
 	}
 	st.activeScopes.Add(1)
 	st.scopesStarted.Add(1)

@@ -172,21 +172,24 @@ func (s *Scope) TraceID() string {
 }
 
 // AdoptGeneratedTraceID replaces the Scope's trace ID with traceID if the
-// Scope originally generated a random trace ID because none was present when
-// StartScope was called. It returns the previous trace ID and true when the
-// trace ID was updated.
+// Scope generated a random trace ID because none was present when StartScope
+// was called, or HTTPMiddleware took it from an X-Trace-Id or X-Request-Id
+// header. otelflightrec calls it when the request's server span starts after
+// the scope (OpenTelemetry middleware inside HTTPMiddleware), so logs and
+// spans share the span's trace. It returns the previous trace ID and true
+// when the trace ID was updated.
 func (s *Scope) AdoptGeneratedTraceID(traceID string) (string, bool) {
 	if s == nil || traceID == "" {
 		return "", false
 	}
 	s.mu.Lock()
-	if s.closed || !s.generatedTraceID {
+	if s.closed || !s.adoptableTraceID {
 		s.mu.Unlock()
 		return "", false
 	}
 	old := s.meta.TraceID
 	s.meta.TraceID = traceID
-	s.generatedTraceID = false
+	s.adoptableTraceID = false
 	s.mu.Unlock()
 	if s.state != nil {
 		if h := s.state.hub.Load(); h != nil {

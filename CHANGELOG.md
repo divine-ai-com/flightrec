@@ -4,6 +4,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Fixed
+- With OpenTelemetry middleware inside `HTTPMiddleware`, a scope keyed by an `X-Trace-Id` or `X-Request-Id` header (a proxy's request ID, say) now takes the server span's trace ID when the span starts, as a generated ID already did. Before, its logs and notices kept the header value while its spans used the real trace. `Scope.AdoptGeneratedTraceID` applies to such header IDs too (#96).
+
 ## [v0.5.0] - 2026-11-15
 
 Fixes from the first end-to-end test of the released modules: three services under load, with Redis, NATS, OpenTelemetry export and `kill -9` (see [docs/e2e-report.md](docs/e2e-report.md)). Three changes alter behaviour, listed under Changed.

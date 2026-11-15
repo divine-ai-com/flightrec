@@ -81,7 +81,9 @@ func MarkerValue(reason string) (value string, ok bool) {
 // traceparent, X-Trace-Id or X-Request-Id header, in that order (the first
 // valid value wins), or generated. X-Trace-Id and X-Request-Id values are
 // valid when they are 1 to 128 bytes of letters, digits and _ . : - / + = @.
-// Put OpenTelemetry middleware outside HTTPMiddleware so the two agree.
+// With OpenTelemetry middleware inside HTTPMiddleware, otelflightrec replaces
+// a generated or X-Trace-Id/X-Request-Id ID with the server span's trace when
+// the span starts, so logs and spans agree in either order.
 // Services that receive requests from outside your system should set
 // Options.IgnoreRequestTraceIDs. The buffer
 // is flushed if an error log is recorded, the response status is 5xx, the
@@ -91,17 +93,18 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var traceID string
+			var adoptable bool
 			// A trace in the context (OpenTelemetry middleware in front)
 			// wins over headers; StartScope takes it from ctx, unless a
 			// parent scope's ID applies.
 			if !rec.state.opts.IgnoreRequestTraceIDs && !rec.state.extractTraceContext(r.Context()).HasTraceID() {
-				traceID = extractHTTPTraceID(r.Header)
+				traceID, adoptable = extractHTTPTraceID(r.Header)
 			}
-			ctx, sc := StartScope(r.Context(), rec, ScopeMeta{
+			ctx, sc := startScope(r.Context(), rec, ScopeMeta{
 				TraceID: traceID,
 				Method:  r.Method,
 				Path:    r.URL.Path,
-			})
+			}, adoptable)
 			if _, ok := r.Header[FlushHeader]; ok {
 				// Clone so the caller's header map is left as received.
 				r = r.Clone(r.Context())
@@ -129,20 +132,23 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 	}
 }
 
-func extractHTTPTraceID(h http.Header) string {
+// extractHTTPTraceID returns the trace ID from the request headers, and
+// whether it came from X-Trace-Id or X-Request-Id rather than traceparent:
+// an OpenTelemetry span started later may replace such an ID.
+func extractHTTPTraceID(h http.Header) (id string, adoptable bool) {
 	if tp := strings.TrimSpace(h.Get("Traceparent")); tp != "" {
 		if tid := parseW3CTraceparent(tp); tid != "" {
-			return tid
+			return tid, false
 		}
 	}
 	for _, key := range []string{"X-Trace-Id", "X-Request-Id"} {
 		for _, v := range h.Values(key) {
 			if id := strings.TrimSpace(v); validTraceID(id) {
-				return id
+				return id, true
 			}
 		}
 	}
-	return ""
+	return "", false
 }
 
 // maxTraceIDLen bounds trace IDs taken from X-Trace-Id and X-Request-Id.

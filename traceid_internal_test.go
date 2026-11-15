@@ -41,7 +41,7 @@ func TestExtractHTTPTraceIDLimits(t *testing.T) {
 			if tc.requestID != "" {
 				h["X-Request-Id"] = []string{tc.requestID}
 			}
-			if got := extractHTTPTraceID(h); got != tc.want {
+			if got, _ := extractHTTPTraceID(h); got != tc.want {
 				t.Errorf("extractHTTPTraceID = %q, want %q", got, tc.want)
 			}
 		})
@@ -173,7 +173,7 @@ func FuzzExtractHTTPTraceID(f *testing.F) {
 		h["Traceparent"] = []string{traceparent}
 		h["X-Trace-Id"] = []string{traceID}
 		h["X-Request-Id"] = []string{requestID}
-		got := extractHTTPTraceID(h)
+		got, _ := extractHTTPTraceID(h)
 		if got == "" {
 			return
 		}
