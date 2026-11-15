@@ -66,15 +66,16 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.27.x
-      - name: Core coverage with minimum
+      - name: Coverage with minimums
         run: make cover
       - name: Coverage summary
         if: always()
         run: |
           {
-            echo '### Core module coverage'
+            echo '### Coverage'
             echo '```'
-            go tool cover -func=coverage.out | tail -1
+            echo "core:          $(go tool cover -func=coverage.out | tail -1 | awk '{print $NF}')"
+            echo "otelflightrec: $(cd otelflightrec && go tool cover -func=coverage.out | tail -1 | awk '{print $NF}')"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
