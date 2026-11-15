@@ -30,7 +30,7 @@ permissions:
 
 concurrency:
   # One group per commit: back-to-back merges each keep their comparison.
-  group: ${{ github.workflow }}-${{ github.sha }}-${{ inputs.base }}-${{ inputs.head }}
+  group: ${{ github.workflow }}-${{ github.sha }}-${{ inputs.base }}-${{ inputs.head }}-${{ inputs.module }}
   cancel-in-progress: false
 
 jobs:
@@ -95,6 +95,10 @@ jobs:
           for side in base head; do
             ref=$BASE; [ "$side" = head ] && ref=$HEAD
             git worktree add --detach "/tmp/$side" "$ref"
+            if [ ! -d "/tmp/$side/$MODULE" ]; then
+              echo "::error::Module $MODULE does not exist at $ref ($side)."
+              exit 1
+            fi
             if ! (cd "/tmp/$side/$MODULE" && go test -c -o "/tmp/$side.test" .); then
               echo "::error::Benchmarks at $ref ($side) do not build with $(go version | cut -d' ' -f3)."
               exit 1

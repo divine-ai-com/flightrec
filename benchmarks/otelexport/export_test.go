@@ -68,6 +68,11 @@ func exportPipeline(b *testing.B) (sdktrace.SpanProcessor, *countingExporter, *c
 // runTraces creates b.N traces of one root span and ten child spans, the
 // last child failing when fail is set, then flushes the pipeline inside the
 // timed region and reports what was exported per trace.
+//
+// ns/op is wall time: the exporter runs on other cores while spans are
+// created. cpu-ns/op is the process's CPU time (user and system, all
+// threads, including the local collector's handler) per trace, which counts
+// the export work in full.
 func runTraces(b *testing.B, sp sdktrace.SpanProcessor, ce *countingExporter, c *collector, fail bool) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
 	defer func() { _ = tp.Shutdown(context.Background()) }()
@@ -76,6 +81,7 @@ func runTraces(b *testing.B, sp sdktrace.SpanProcessor, ce *countingExporter, c 
 
 	b.ReportAllocs()
 	b.ResetTimer()
+	cpu0, cpuOK := processCPU()
 	for range b.N {
 		ctx, root := tracer.Start(bg, "HTTP POST /checkout")
 		for j := range 10 {
@@ -96,6 +102,9 @@ func runTraces(b *testing.B, sp sdktrace.SpanProcessor, ce *countingExporter, c 
 		b.Fatal(err)
 	}
 	b.StopTimer()
+	if cpu1, ok := processCPU(); ok && cpuOK {
+		b.ReportMetric(float64(cpu1-cpu0)/float64(b.N), "cpu-ns/op")
+	}
 	b.ReportMetric(float64(ce.spans.Load())/float64(b.N), "spans/op")
 	b.ReportMetric(float64(c.bytes.Load())/float64(b.N), "exported-B/op")
 }
