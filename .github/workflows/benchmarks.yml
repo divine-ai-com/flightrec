@@ -1,6 +1,7 @@
 name: Benchmarks
 
-# Compares the core module's benchmarks between two refs with benchstat.
+# Compares a module's benchmarks (the core module by default) between two
+# refs with benchstat.
 # Runs on every push to main (against the previous commit) and on demand.
 # Results go to the job summary and an artifact; the job never fails on a
 # slowdown, because shared runners are too noisy to gate on.
@@ -19,13 +20,17 @@ on:
         description: Ref to measure
         required: true
         default: main
+      module:
+        description: Module directory to benchmark, for example benchmarks/otelexport
+        required: true
+        default: .
 
 permissions:
   contents: read
 
 concurrency:
   # One group per commit: back-to-back merges each keep their comparison.
-  group: ${{ github.workflow }}-${{ github.sha }}-${{ inputs.base }}-${{ inputs.head }}
+  group: ${{ github.workflow }}-${{ github.sha }}-${{ inputs.base }}-${{ inputs.head }}-${{ inputs.module }}
   cancel-in-progress: false
 
 jobs:
@@ -78,22 +83,30 @@ jobs:
         env:
           BASE: ${{ steps.refs.outputs.base }}
           HEAD: ${{ steps.refs.outputs.head }}
+          MODULE: ${{ inputs.module || '.' }}
         run: |
           set -euo pipefail
+          case "$MODULE" in
+            *..*|/*) echo "::error::Invalid module: $MODULE"; exit 1 ;;
+          esac
           # Build both test binaries first, then alternate runs so that
-          # changes in runner load affect both sides equally. Only the core
-          # module's root package has benchmarks.
+          # changes in runner load affect both sides equally. Benchmarks live
+          # in each module's root package.
           for side in base head; do
             ref=$BASE; [ "$side" = head ] && ref=$HEAD
             git worktree add --detach "/tmp/$side" "$ref"
-            if ! (cd "/tmp/$side" && go test -c -o "/tmp/$side.test" .); then
+            if [ ! -d "/tmp/$side/$MODULE" ]; then
+              echo "::error::Module $MODULE does not exist at $ref ($side)."
+              exit 1
+            fi
+            if ! (cd "/tmp/$side/$MODULE" && go test -c -o "/tmp/$side.test" .); then
               echo "::error::Benchmarks at $ref ($side) do not build with $(go version | cut -d' ' -f3)."
               exit 1
             fi
           done
           for i in $(seq 1 "$RUNS"); do
             for side in base head; do
-              (cd "/tmp/$side" && "/tmp/$side.test" -test.run '^$' -test.bench . -test.benchmem -test.count 1) >> "$side.txt"
+              (cd "/tmp/$side/$MODULE" && "/tmp/$side.test" -test.run '^$' -test.bench . -test.benchmem -test.count 1) >> "$side.txt"
             done
           done
       - name: Compare
@@ -101,9 +114,10 @@ jobs:
         env:
           BASE: ${{ steps.refs.outputs.base }}
           HEAD: ${{ steps.refs.outputs.head }}
+          MODULE: ${{ inputs.module || '.' }}
         run: |
           {
-            echo "### Core benchmarks: \`$BASE\` vs \`$HEAD\`"
+            echo "### Benchmarks of \`$MODULE\`: \`$BASE\` vs \`$HEAD\`"
             echo
             echo "Runner: $(nproc) vCPU, $(go version | cut -d' ' -f3). $RUNS alternating runs each."
             echo
