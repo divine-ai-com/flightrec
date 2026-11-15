@@ -5,15 +5,11 @@ package flightrec
 
 import "net/http"
 
-// TransportOption configures NewTransport. No options are defined yet; the
-// parameter exists so policies, such as ignoring markers on responses that a
-// retry later replaced, can be added without changing the signature.
+// TransportOption configures NewTransport. None are defined yet.
 type TransportOption interface {
 	applyTransport(*transportConfig)
 }
 
-// transportConfig holds settings from TransportOption values. It is empty
-// until the first option is added.
 type transportConfig struct{}
 
 // NewTransport returns an http.RoundTripper that sends requests through next
@@ -21,10 +17,9 @@ type transportConfig struct{}
 //
 // When the response carries exactly one FlushHeader value that is a built-in
 // flush reason (see ValidMarker), and the request context holds an open
-// Scope, the scope is triggered with reason "downstream:<value>". A failure
-// in a service you call then keeps your logs for the same request too. If
-// your own response headers have not been written yet, your response carries
-// the marker further up the call chain.
+// Scope, the scope is triggered with reason "downstream:<value>". If your own
+// response headers have not been written yet, your response carries the
+// marker further up the call chain.
 //
 // Any other FlushHeader value, or more than one, is ignored and counted in
 // Stats.MarkersRejected of the scope's Recorder, because it comes from

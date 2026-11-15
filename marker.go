@@ -36,12 +36,8 @@ func (s *Scope) SendFlushMarker(send func(value string) error) bool {
 // Stats.DownstreamTriggers if the scope was open and not yet triggered;
 // anything else is counted in Stats.MarkersRejected and ignored. It reports
 // whether the scope was triggered. Without a scope in ctx, or with no values,
-// it does nothing.
-//
-// It takes a context rather than a Scope because the receiving side, such as
-// an http.RoundTripper, has only the request context. NewTransport uses it
-// for FlushHeader. Integrations for other protocols use it for the marker in
-// their response metadata.
+// it does nothing. Integrations for other protocols call it as NewTransport
+// does for FlushHeader.
 func ReceiveMarker(ctx context.Context, values []string) bool {
 	if len(values) == 0 {
 		return false
