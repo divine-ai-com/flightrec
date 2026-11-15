@@ -4,14 +4,19 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
-### Security
-- `StartJournal` refuses a lock file (`path.lock`) that is not a private regular file of the current user with one link, instead of locking a file another user planted.
-- New guide, [Running flightrec safely](docs/security.md): settings for public-facing services, notifier authentication and channel permissions, sensitive data, where to put the journal, and resource limits.
+## [v0.6.0] - 2026-11-15
+
+Security hardening from a review of the whole package, and a cleaner repository layout. The layout change moves no exported identifier: import paths, the API and every log line are unchanged.
+
+Modules released: core `v0.6.0`, `otelflightrec/v0.3.1` and `grpcflightrec/v0.3.2` (READMEs for pkg.go.dev only). `notifier/redisnotifier` and `notifier/natsnotifier` are unchanged at `v0.3.0`.
 
 ### Changed
 - With OpenTelemetry middleware inside `HTTPMiddleware`, a scope keyed by a request header (`traceparent`, `X-Trace-Id`, `X-Request-Id`) takes the server span's trace ID when the span starts, as a generated ID already did, so logs and spans agree in either middleware order. The header ID stays an alias: notifier notices for it still reach the scope (and its child scopes), failures are announced under both IDs, the per-trace cap of retained scopes applies to both, and flushed records and the summary line carry it as `flightrec.request_id`. The adoption is journaled, so recovered records carry the same IDs (#96).
+- Repository layout: the root package is organised by concern in 10 files, with machinery in `internal/` (`traceid`, `snapshot`, `notify`, `journal`); community files moved to `.github/`, `RELEASING.md` to `docs/`, and the demo to `examples/demo`.
 
 ### Security
+- `StartJournal` refuses a lock file (`path.lock`) that is not a private regular file of the current user with one link, instead of locking a file another user planted.
+- New guide, [Running flightrec safely](docs/security.md): settings for public-facing services, notifier authentication and channel permissions, sensitive data, where to put the journal, and resource limits.
 - With `Retain` or `StartJournal`, `slog.Any` values were copied as JSON only, so `slog.TextHandler` and other handlers that print values with `String` or `MarshalText` showed the raw value: a type that redacts itself in `String` (a password type printing `***`) leaked once either feature was on. Copies now keep both renderings, made as slog's handlers make them (a nil pointer prints `<nil>` instead of panicking). Journals written by this version store both; an earlier version cannot recover records with `slog.Any` values from them, so recover before rolling back.
 - Copied `slog.Any` values are capped at 64 KB each, and copying for `Retain` stops once a scope's copies exceed `MaxRetained`, so large values cannot make retention allocate far beyond its limits.
 - `WithSigningKey` authenticates notifier messages with HMAC-SHA256 and a timestamp; unsigned, forged and stale messages are rejected. Without it, anyone who can publish on the notifier channel can trigger flushes in every service.
