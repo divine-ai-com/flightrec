@@ -28,3 +28,14 @@ This page describes the core buffering design. Cross-service flush (`Retain`, no
 1. **Zero-Allocation Log-Time Span Capture:** When `otelflightrec` is imported, it registers an OpenTelemetry `TraceExtractor` and `TraceInjector` with `flightrec`. On every `Recorder.Handle(ctx, rec)` call inside a scope, `flightrec` extracts the 16-byte `TraceID`, 8-byte `SpanID`, and `TraceFlags` from `ctx` into fixed-size value arrays on `bufferedEntry` (0 heap allocations). When a triggered scope flushes, `flightrec` attaches `flightrec.span_id` and restores the log-time `SpanContext` (with `FlagsSampled` set) into the `context.Context` passed to `Next.Handle`.
 2. **Per-Trace Span Buffering (`SpanProcessor`):** `otelflightrec.SpanProcessor` buffers finished child spans in a lazily allocated per-trace ring buffer (`MaxBytesPerTrace`, default 256 KB) while keeping the local root span in a dedicated slot so child span volume can never evict the root span. Process-wide span memory is bounded by `MaxTotalBytes` (default 64 MB) using oldest-trace eviction, and abandoned unclosed traces are swept after `MaxTraceAge` (default 5 minutes).
 3. **Bidirectional Trigger Coordination:** Linking `SpanProcessor` with `Recorder` via `ScopeObserver` ensures that a span error (`codes.Error`), recorded exception event, or slow trace triggers the active log `Scope`, and conversely an `error_log`, HTTP 5xx, gRPC server fault, panic, or `flightrec.Flush` triggers the trace buffer regardless of whether `otelhttp` wraps `flightrec.HTTPMiddleware` or vice versa.
+
+## Code map and invariants
+
+The root package holds the public API, one concern per file: `recorder.go` (the `slog.Handler`), `scope.go` (request lifecycle), `buffer.go` (per-scope ring and `MaxTotal` eviction), `output.go`, `options.go`, `stats.go`, `trace.go`, `http.go`, `transport.go`, `marker.go`, `grpc.go`, `retain.go`, `notifier.go` and `journal*.go`. Machinery with no dependency on those types lives in `internal/`: `traceid` (validation, `traceparent`, generation), `snapshot` (copies of `slog.Any` values), `notify` (wire format, signing, limiters) and `journal` (file format, writer, reader).
+
+Invariants the code relies on:
+
+- **Lock order:** `Scope.mu` before `recorderState.listMu`; the notifier hub's shard locks are never held while calling into a scope.
+- **A scope writes once:** `End` closes the scope under `Scope.mu`; records that arrive later pass through to `Next`, and `trigger` reports a change only once, so notices and stats count each scope once.
+- **Crash journal ordering:** a triggered scope writes its end entry only after its records reached `Next`, so a crash during a flush repeats records rather than losing them (at least once).
+- **Untrusted input is bounded before use:** trace IDs (charset and length), flush markers (an allowlist), notifier messages (size, count, signature) and journal files (checksums, ownership) are validated where they enter.
