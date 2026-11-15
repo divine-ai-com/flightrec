@@ -1,0 +1,46 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. To report a security vulnerability, use the
+        [private reporting form](https://github.com/divine-ai-com/flightrec/security/advisories/new) instead.
+  - type: input
+    id: version
+    attributes:
+      label: flightrec version
+      description: Output of `go list -m github.com/divine-ai-com/flightrec`, plus the submodule version if you use one.
+      placeholder: github.com/divine-ai-com/flightrec v0.2.0
+    validations:
+      required: true
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version and platform
+      description: Output of `go version`.
+      placeholder: go version go1.27.4 linux/amd64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: The smallest program or test that shows the problem.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include log output or errors.
+    validations:
+      required: true

@@ -2,9 +2,13 @@
 
 ## Supported Versions
 
-| Version | Supported |
-| :--- | :--- |
-| `v0.1.x` | Yes |
+Only the latest minor release of each module receives security fixes.
+
+| Module | Supported |
+| --- | --- |
+| `github.com/divine-ai-com/flightrec` | `v0.2.x` |
+| `github.com/divine-ai-com/flightrec/grpcflightrec` | `v0.2.x` |
+| `github.com/divine-ai-com/flightrec/otelflightrec` | `v0.2.x` |
 
 ## Reporting a Vulnerability
 

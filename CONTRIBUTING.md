@@ -1,18 +1,56 @@
 # Contributing to flightrec
 
-Thank you for your interest in contributing to `flightrec`.
+Thanks for your interest in improving flightrec. This guide covers how to propose a change and what a pull request needs before it can be merged.
 
-## Ground Rules
+## Before you start
 
-1. **One promise:** Full debug detail for failed requests, near-zero cost for healthy ones.
-2. **Zero external dependencies in the root module:** Keep the core package dependent only on the Go standard library.
-3. **Proof with numbers:** Any change to the hot buffering or flushing path must include `go test -bench=. -benchmem` before/after output.
-4. **Race-clean:** All pull requests must pass `go test -race ./...`.
+- **Bugs:** open an issue with the bug report form, including a minimal reproduction.
+- **Features:** open an issue with the feature request form first, so the design can be agreed before you write code.
+- **Security issues:** do not open a public issue. Follow [SECURITY.md](SECURITY.md).
 
-## Local Development
+Issues labeled [`good first issue`](https://github.com/divine-ai-com/flightrec/labels/good%20first%20issue) are a good place to start.
+
+## Ground rules
+
+1. **One promise.** Full debug detail for failed requests, one line for healthy ones. Features that do not serve it wait for a later version.
+2. **No dependencies in the core module.** The root package uses only the standard library. Integrations that need a dependency live in their own module, like `grpcflightrec` and `otelflightrec`.
+3. **Numbers for performance claims.** A change to the buffering, flushing or pass-through path includes `benchstat` output from before and after.
+4. **Race-clean.** All tests pass with `-race`.
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `*.go` at the root | The core module: `Recorder`, scopes, HTTP middleware |
+| `grpcflightrec/` | gRPC interceptors, a separate module |
+| `otelflightrec/` | OpenTelemetry span processor and log bridge, a separate module |
+| `cmd/demo/` | The volume and fidelity demo used in the README |
+| `docs/` | Quickstart, design notes and troubleshooting |
+
+## Development
+
+Requires the two latest Go releases (currently 1.26 and 1.27).
 
 ```bash
-go test -race -v ./...
-go test -bench=. -benchmem -run=^$ ./...
+go test -race ./...
+(cd grpcflightrec && go test -race ./...)
+(cd otelflightrec && go test -race ./...)
+go test -run='^$' -bench=. -benchmem ./...
 go run ./cmd/demo
 ```
+
+For benchmark comparisons, run each side with `-count=10` and compare with [benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat).
+
+## Pull requests
+
+- Branch from `main` with a name like `fix/short-description` or `feat/short-description`.
+- Keep one logical change per PR, closing one issue.
+- Title the PR as a [Conventional Commit](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`, lower case, imperative, no period. Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`. Scopes: `core`, `http`, `grpc`, `otel`. The title becomes the commit message on `main`.
+- Fill in the PR template: what and why, the issue it closes, and how it was tested.
+- Add an entry under `## [Unreleased]` in `CHANGELOG.md`, unless the change is invisible to users.
+- A bug fix includes a test that fails without the fix.
+- Resolve every review thread before merge. PRs are squash-merged.
+
+## Releases
+
+Maintainers follow [RELEASING.md](RELEASING.md).

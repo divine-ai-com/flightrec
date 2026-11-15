@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /grpcflightrec
+      - /otelflightrec
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    labels: [chore, skip-changelog]
+    groups:
+      opentelemetry:
+        patterns: ["go.opentelemetry.io/*"]
+      golang-x:
+        patterns: ["golang.org/x/*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    labels: [chore, area/ci, skip-changelog]
+    groups:
+      actions:
+        patterns: ["*"]
