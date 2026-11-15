@@ -431,8 +431,7 @@ func (r *Recorder) Handle(ctx context.Context, rec slog.Record) error {
 		return nil
 	}
 
-	cloned := cloneAndResolveRecord(rec)
-	payloadSize := estimateRecordPayloadSize(&cloned, r)
+	cloned, payloadSize := cloneAndSizeRecord(rec)
 	if !sc.bufferRecord(cloned, r, payloadSize, tc) {
 		// The scope has already ended; pass the late record through so it is
 		// neither silently lost nor uncounted.
@@ -1124,18 +1123,29 @@ func (r *Recorder) buildOutputRecord(rec slog.Record, traceID, spanID, flushReas
 	return out
 }
 
-func cloneAndResolveRecord(rec slog.Record) slog.Record {
+// cloneAndSizeRecord copies rec for buffering, resolving LogValuer and group
+// attributes, and estimates the bytes it holds beyond its slot. One pass over
+// the attributes covers the common case of plain values.
+//
+// Attributes added with Logger.With are not counted: they live on the shared
+// child Recorder each entry points to, not in the record.
+func cloneAndSizeRecord(rec slog.Record) (slog.Record, int64) {
 	needsResolve := false
+	sz := int64(len(rec.Message))
 	rec.Attrs(func(a slog.Attr) bool {
 		k := a.Value.Kind()
 		if k == slog.KindLogValuer || k == slog.KindGroup {
 			needsResolve = true
 			return false
 		}
+		sz += estimateAttrPayloadSize(a)
 		return true
 	})
 	if !needsResolve {
-		return rec.Clone()
+		if n := rec.NumAttrs(); n > 5 {
+			sz += int64(n) * int64(unsafe.Sizeof(slog.Attr{}))
+		}
+		return rec.Clone(), sz
 	}
 	out := slog.NewRecord(rec.Time, rec.Level, rec.Message, rec.PC)
 	raw := make([]slog.Attr, 0, rec.NumAttrs())
@@ -1147,7 +1157,7 @@ func cloneAndResolveRecord(rec slog.Record) slog.Record {
 	if len(cleaned) > 0 {
 		out.AddAttrs(cleaned...)
 	}
-	return out
+	return out, estimateRecordPayloadSize(&out)
 }
 
 func cleanAttrs(attrs []slog.Attr) []slog.Attr {
@@ -1176,19 +1186,10 @@ func cleanAttrs(attrs []slog.Attr) []slog.Attr {
 	return out
 }
 
-func estimateRecordPayloadSize(rec *slog.Record, r *Recorder) int64 {
+func estimateRecordPayloadSize(rec *slog.Record) int64 {
 	sz := int64(len(rec.Message))
 	if n := rec.NumAttrs(); n > 5 {
 		sz += int64(n) * int64(unsafe.Sizeof(slog.Attr{}))
-	}
-	for i := range r.rootAttrs {
-		sz += estimateAttrPayloadSize(r.rootAttrs[i])
-	}
-	for i := range r.frames {
-		sz += int64(len(r.frames[i].name))
-		for j := range r.frames[i].attrs {
-			sz += estimateAttrPayloadSize(r.frames[i].attrs[j])
-		}
 	}
 	rec.Attrs(func(a slog.Attr) bool {
 		sz += estimateAttrPayloadSize(a)
