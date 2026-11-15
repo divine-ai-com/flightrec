@@ -6,6 +6,7 @@ package grpcflightrec_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -84,7 +85,7 @@ var testServiceDesc = grpc.ServiceDesc{
 		ClientStreams: true,
 		Handler: func(srv any, ss grpc.ServerStream) error {
 			for {
-				if err := ss.RecvMsg(new(emptypb.Empty)); err == io.EOF {
+				if err := ss.RecvMsg(new(emptypb.Empty)); errors.Is(err, io.EOF) {
 					break
 				} else if err != nil {
 					return err
@@ -217,7 +218,7 @@ func TestStreamFlushPropagates(t *testing.T) {
 		}
 		_ = cs.CloseSend()
 		for {
-			if err := cs.RecvMsg(new(emptypb.Empty)); err == io.EOF {
+			if err := cs.RecvMsg(new(emptypb.Empty)); errors.Is(err, io.EOF) {
 				return nil
 			} else if err != nil {
 				return err
