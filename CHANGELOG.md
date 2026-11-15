@@ -8,6 +8,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 - `otelflightrec` and `grpcflightrec` now require core `v0.2.0` instead of a zero pseudo-version and `v0.1.0`, so they install from the module proxy. `otelflightrec/v0.2.0`, `grpcflightrec/v0.1.1` and `grpcflightrec/v0.2.0` are retracted (#23).
 - `otelflightrec.SpanProcessor` no longer tracks spans that are recorded but not sampled. They pass through to `Next` unchanged instead of holding a trace entry until `MaxTraceAge` (#24).
 
+### Security
+- `grpcflightrec` requires `golang.org/x/net` v0.60.0, which fixes GO-2026-6603, GO-2026-6611, GO-2026-6612 and GO-2026-6617 in the HTTP/2 code that gRPC uses. Previously the minimum was v0.58.0 (#31).
+
 ## [v0.2.0] - 2026-11-15
 
 ### Added
