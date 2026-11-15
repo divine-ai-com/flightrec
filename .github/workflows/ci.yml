@@ -157,6 +157,10 @@ jobs:
         # requests.
         working-directory: examples/cross-service
         run: go run -race .
+      - name: Crash recovery example
+        # The program kills a server mid-request and fails unless the next
+        # start recovers the request's debug logs.
+        run: go run -race ./examples/crash-recovery
       # One iteration each: this checks the benchmarks run, not their speed.
       - name: Benchmarks compile and run
         run: |
