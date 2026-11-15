@@ -6,6 +6,7 @@ package flightrec
 import (
 	"context"
 	"errors"
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -49,7 +50,7 @@ func ExtractTraceIDFromMetadata(md map[string][]string) string {
 	}
 	if vals := lookupMetadataValues(md, "traceparent"); len(vals) > 0 {
 		for _, v := range vals {
-			if tid := parseW3CTraceparent(strings.TrimSpace(v)); tid != "" {
+			if tid := traceid.ParseTraceparent(strings.TrimSpace(v)); tid != "" {
 				return tid
 			}
 		}
@@ -57,7 +58,7 @@ func ExtractTraceIDFromMetadata(md map[string][]string) string {
 	for _, key := range []string{"x-trace-id", "x-request-id"} {
 		if vals := lookupMetadataValues(md, key); len(vals) > 0 {
 			for _, v := range vals {
-				if trimmed := strings.TrimSpace(v); validTraceID(trimmed) {
+				if trimmed := strings.TrimSpace(v); traceid.Valid(trimmed) {
 					return trimmed
 				}
 			}
@@ -169,7 +170,7 @@ func resolveGRPCTraceID(ctx context.Context, st *recorderState, extractTraceID G
 		return ""
 	}
 	if extractTraceID != nil {
-		if tid := extractTraceID(ctx); validTraceID(tid) {
+		if tid := extractTraceID(ctx); traceid.Valid(tid) {
 			return tid
 		}
 	}

@@ -5,6 +5,7 @@ package flightrec
 
 import (
 	"context"
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 )
 
 func TestExtractHTTPTraceIDLimits(t *testing.T) {
-	long := strings.Repeat("a", maxTraceIDLen)
+	long := strings.Repeat("a", traceid.MaxLen)
 	for _, tc := range []struct {
 		name      string
 		traceIDs  []string
@@ -50,7 +51,7 @@ func TestExtractHTTPTraceIDLimits(t *testing.T) {
 
 func TestExtractTraceIDFromMetadataLimits(t *testing.T) {
 	md := map[string][]string{
-		"x-trace-id":   {strings.Repeat("z", maxTraceIDLen+1)},
+		"x-trace-id":   {strings.Repeat("z", traceid.MaxLen+1)},
 		"x-request-id": {"bad value", "req-77"},
 	}
 	if got := ExtractTraceIDFromMetadata(md); got != "req-77" {
@@ -128,32 +129,6 @@ func TestActiveSpanBeatsRequestHeaders(t *testing.T) {
 	}
 }
 
-func TestParseW3CTraceparent(t *testing.T) {
-	const tid = "4bf92f3577b34da6a3ce929d0e0e4736"
-	for _, tc := range []struct {
-		in, want string
-	}{
-		{"00-" + tid + "-00f067aa0ba902b7-01", tid},
-		{"01-" + tid + "-00f067aa0ba902b7-01", tid},
-		{"01-" + tid + "-00f067aa0ba902b7-01-extra", tid},
-		{"cc-" + tid + "-00f067aa0ba902b7-01-what-the-future-holds", tid},
-		{"00-" + tid + "-00f067aa0ba902b7-01-extra", ""}, // version 00 has exactly four fields
-		{"01-" + tid + "-00f067aa0ba902b7-01x", ""},      // a later field must follow a dash
-		{"ff-" + tid + "-00f067aa0ba902b7-01", ""},       // version ff is invalid
-		{"00-" + strings.ToUpper(tid) + "-00f067aa0ba902b7-01", ""},
-		{"00-" + tid + "-0000000000000000-01", ""}, // zero parent ID
-		{"00-00000000000000000000000000000000-00f067aa0ba902b7-01", ""},
-		{"00-" + tid + "-00f067aa0ba902b7-0g", ""},
-		{"0-" + tid + "-00f067aa0ba902b7-01", ""},
-		{"00_" + tid + "-00f067aa0ba902b7-01", ""},
-		{"", ""},
-	} {
-		if got := parseW3CTraceparent(tc.in); got != tc.want {
-			t.Errorf("parseW3CTraceparent(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 func isGeneratedID(id string) bool {
 	if len(id) != 32 {
 		return false
@@ -177,17 +152,17 @@ func FuzzExtractHTTPTraceID(f *testing.F) {
 		if got == "" {
 			return
 		}
-		if !validTraceID(got) {
+		if !traceid.Valid(got) {
 			t.Fatalf("result %q is outside the limits", got)
 		}
-		tp := parseW3CTraceparent(strings.TrimSpace(traceparent))
+		tp := traceid.ParseTraceparent(strings.TrimSpace(traceparent))
 		tid, rid := strings.TrimSpace(traceID), strings.TrimSpace(requestID)
 		switch {
 		case tp != "":
 			if got != tp {
 				t.Fatalf("got %q, want traceparent ID %q", got, tp)
 			}
-		case validTraceID(tid):
+		case traceid.Valid(tid):
 			if got != tid {
 				t.Fatalf("got %q, want X-Trace-Id %q", got, tid)
 			}
@@ -211,7 +186,7 @@ func FuzzExtractTraceIDFromMetadata(f *testing.F) {
 		if got == "" {
 			return
 		}
-		if !validTraceID(got) || (got != strings.TrimSpace(traceID) && got != strings.TrimSpace(requestID)) {
+		if !traceid.Valid(got) || (got != strings.TrimSpace(traceID) && got != strings.TrimSpace(requestID)) {
 			t.Fatalf("result %q is not a valid input value", got)
 		}
 	})

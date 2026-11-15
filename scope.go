@@ -5,6 +5,7 @@ package flightrec
 
 import (
 	"context"
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"log/slog"
 	"sync"
 	"time"
@@ -89,7 +90,7 @@ func startScope(ctx context.Context, rec *Recorder, meta ScopeMeta, source trace
 		}
 	}
 	if meta.TraceID == "" {
-		meta.TraceID = generateTraceID()
+		meta.TraceID = traceid.Generate()
 		source = idGenerated
 	}
 	sc := &Scope{

@@ -6,6 +6,7 @@ package flightrec
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"log/slog"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func FuzzNotifierReceive(f *testing.F) {
 			h.receive(msg)
 			for len(h.inbox) > 0 {
 				n := <-h.inbox
-				if !validTraceID(n.TraceID) || !ValidMarker(n.Reason) {
+				if !traceid.Valid(n.TraceID) || !ValidMarker(n.Reason) {
 					t.Fatalf("invalid notice reached the inbox: %+v", n)
 				}
 			}
