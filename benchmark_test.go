@@ -7,10 +7,12 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/divine-ai-com/flightrec"
+	"github.com/divine-ai-com/flightrec/notifier/memnotifier"
 )
 
 const logsPerRequest = 20
@@ -257,3 +259,34 @@ func BenchmarkFlightRec_AnyValues_Dropped(b *testing.B) { benchAnyValues(b, 0) }
 // BenchmarkFlightRec_AnyValues_Retained includes copying each slog.Any value
 // when the scope is retained.
 func BenchmarkFlightRec_AnyValues_Retained(b *testing.B) { benchAnyValues(b, 30*time.Second) }
+
+// benchParallelRequests runs healthy requests on all CPUs, optionally with a
+// notifier attached, to measure the cost of the active-scope index.
+func benchParallelRequests(b *testing.B, withNotifier bool) {
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewJSONHandler(io.Discard, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+	})
+	if withNotifier {
+		defer rec.StartNotifier(context.Background(), memnotifier.New())()
+	}
+	logger := slog.New(rec)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			i++
+			ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "trace-" + strconv.Itoa(i)})
+			logger.DebugContext(ctx, "step", "i", i)
+			sc.End(ctx, 200)
+		}
+	})
+}
+
+// BenchmarkParallel_NoNotifier is the baseline for BenchmarkParallel_Notifier.
+func BenchmarkParallel_NoNotifier(b *testing.B) { benchParallelRequests(b, false) }
+
+// BenchmarkParallel_Notifier adds an attached in-memory notifier.
+func BenchmarkParallel_Notifier(b *testing.B) { benchParallelRequests(b, true) }

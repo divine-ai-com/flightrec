@@ -188,6 +188,11 @@ func (s *Scope) AdoptGeneratedTraceID(traceID string) (string, bool) {
 	s.meta.TraceID = traceID
 	s.generatedTraceID = false
 	s.mu.Unlock()
+	if s.state != nil {
+		if h := s.state.hub.Load(); h != nil {
+			h.scopeRekeyed(s, old, traceID)
+		}
+	}
 	return old, true
 }
 
