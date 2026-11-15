@@ -156,13 +156,14 @@ func InvokeGRPCStream(
 }
 
 func resolveGRPCTraceID(ctx context.Context, extractTraceID GRPCMetadataExtractor, ignoreRequestIDs bool) string {
+	if ignoreRequestIDs {
+		// Extractors read incoming metadata, which the client controls.
+		return TraceID(ctx)
+	}
 	if extractTraceID != nil {
 		if tid := extractTraceID(ctx); validTraceID(tid) {
 			return tid
 		}
-	}
-	if ignoreRequestIDs {
-		return TraceID(ctx)
 	}
 	if ctx != nil {
 		if md, ok := ctx.Value(incomingMetadataContextKey{}).(map[string][]string); ok {

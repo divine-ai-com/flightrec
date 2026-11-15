@@ -210,15 +210,10 @@ func (w *statusResponseWriter) beforeHeaders(code int) {
 		w.scope.Trigger(httpStatusReason(code))
 	}
 	w.scope.triggerIfSlow()
-	if w.scope.state.opts.DisableFlushMarker {
-		return
-	}
-	if triggered, reason := w.scope.TriggerState(); triggered {
-		value, _ := MarkerValue(reason)
+	w.markerSent = w.scope.SendFlushMarker(func(value string) error {
 		w.Header().Set(FlushHeader, value)
-		w.markerSent = true
-		w.scope.state.flushMarkersSent.Add(1)
-	}
+		return nil
+	})
 }
 
 // finish runs after the handler returns normally. If the handler wrote
