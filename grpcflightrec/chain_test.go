@@ -48,6 +48,7 @@ func (b *lockedBuffer) lines(t *testing.T) []map[string]any {
 type testService struct {
 	unary  func(ctx context.Context) error
 	stream func(ctx context.Context, send func() error) error
+	upload func(ctx context.Context) error
 }
 
 var testServiceDesc = grpc.ServiceDesc{
@@ -77,6 +78,22 @@ var testServiceDesc = grpc.ServiceDesc{
 				return err
 			}
 			return srv.(*testService).stream(ss.Context(), func() error { return ss.SendMsg(new(emptypb.Empty)) })
+		},
+	}, {
+		StreamName:    "Upload",
+		ClientStreams: true,
+		Handler: func(srv any, ss grpc.ServerStream) error {
+			for {
+				if err := ss.RecvMsg(new(emptypb.Empty)); err == io.EOF {
+					break
+				} else if err != nil {
+					return err
+				}
+			}
+			if err := srv.(*testService).upload(ss.Context()); err != nil {
+				return err
+			}
+			return ss.SendMsg(new(emptypb.Empty))
 		},
 	}},
 }
@@ -173,8 +190,8 @@ func TestUnaryFlushPropagatesThroughThreeServices(t *testing.T) {
 			t.Errorf("%q: DownstreamTriggers = %d, want %d", tc.msg, got, tc.downstream)
 		}
 	}
-	if got := trailer.Get(grpcflightrec.TrailerKey); len(got) != 1 || got[0] != "grpc_error" {
-		t.Errorf("A's trailer %s = %v, want [grpc_error]", grpcflightrec.TrailerKey, got)
+	if got := trailer.Get(grpcflightrec.FlushTrailer); len(got) != 1 || got[0] != "grpc_error" {
+		t.Errorf("A's trailer %s = %v, want [grpc_error]", grpcflightrec.FlushTrailer, got)
 	}
 	if st := c.rec.Stats(); st.FlushMarkersSent != 1 {
 		t.Errorf("C FlushMarkersSent = %d, want 1", st.FlushMarkersSent)
@@ -219,7 +236,7 @@ func TestStreamFlushPropagates(t *testing.T) {
 func TestClientInterceptorRejectsUnknownTrailer(t *testing.T) {
 	var down, up *node
 	down = startNode(t, &testService{unary: func(ctx context.Context) error {
-		_ = grpc.SetTrailer(ctx, metadata.Pairs(grpcflightrec.TrailerKey, "owned"))
+		_ = grpc.SetTrailer(ctx, metadata.Pairs(grpcflightrec.FlushTrailer, "owned"))
 		return nil
 	}})
 	up = startNode(t, &testService{unary: func(ctx context.Context) error {
@@ -257,7 +274,65 @@ func TestServerTrailerDisabled(t *testing.T) {
 
 	var trailer metadata.MD
 	_ = call(context.Background(), conn, grpc.Trailer(&trailer))
-	if got := trailer.Get(grpcflightrec.TrailerKey); len(got) != 0 {
+	if got := trailer.Get(grpcflightrec.FlushTrailer); len(got) != 0 {
 		t.Errorf("trailer sent with DisableFlushMarker: %v", got)
+	}
+}
+
+func TestClientStreamingFlushPropagates(t *testing.T) {
+	var down, up *node
+	down = startNode(t, &testService{upload: func(ctx context.Context) error {
+		down.log.ErrorContext(ctx, "down: checksum mismatch, repaired")
+		return nil // the RPC still succeeds
+	}})
+	up = startNode(t, &testService{unary: func(ctx context.Context) error {
+		up.log.DebugContext(ctx, "up: uploading")
+		cs, err := down.conn.NewStream(ctx, &testServiceDesc.Streams[1], "/flightrec.test.Service/Upload")
+		if err != nil {
+			return err
+		}
+		_ = cs.SendMsg(new(emptypb.Empty))
+		_ = cs.CloseSend()
+		return cs.RecvMsg(new(emptypb.Empty)) // what generated CloseAndRecv does
+	}})
+
+	if err := call(context.Background(), up.conn); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if got := flushed(t, up)["up: uploading"]; got != "downstream:error_log" {
+		t.Errorf("upstream flushed with %q, want downstream:error_log", got)
+	}
+}
+
+func TestTrailerSentWhenHandlerPanics(t *testing.T) {
+	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
+	recovery := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (resp any, err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				err = status.Error(codes.Internal, "recovered")
+			}
+		}()
+		return h(ctx, req)
+	}
+	lis := bufconn.Listen(1 << 20)
+	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(recovery, grpcflightrec.UnaryServerInterceptor(rec)))
+	srv.RegisterService(&testServiceDesc, &testService{unary: func(context.Context) error { panic("boom") }})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	var trailer metadata.MD
+	err = call(context.Background(), conn, grpc.Trailer(&trailer))
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("err = %v, want Internal from the recovery interceptor", err)
+	}
+	if got := trailer.Get(grpcflightrec.FlushTrailer); len(got) != 1 || got[0] != "panic" {
+		t.Errorf("trailer = %v, want [panic]", got)
 	}
 }
