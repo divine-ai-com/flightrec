@@ -279,6 +279,47 @@ func TestExceptionAndSlowTraceTriggers(t *testing.T) {
 	})
 }
 
+// TestOutboundSpanErrorsDoNotTrigger checks that an error on a client or
+// producer span (a call to another service that answered NotFound, say)
+// leaves a healthy trace healthy, while the same error on an internal span
+// still triggers.
+func TestOutboundSpanErrorsDoNotTrigger(t *testing.T) {
+	for _, tc := range []struct {
+		kind    trace.SpanKind
+		trigger bool
+	}{
+		{trace.SpanKindClient, false},
+		{trace.SpanKindProducer, false},
+		{trace.SpanKindInternal, true},
+		{trace.SpanKindConsumer, true},
+	} {
+		t.Run(tc.kind.String(), func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			sp := otelflightrec.NewSpanProcessor(otelflightrec.SpanProcessorOptions{
+				Next: sdktrace.NewSimpleSpanProcessor(exporter),
+			})
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
+			defer func() { _ = tp.Shutdown(context.Background()) }()
+			tracer := tp.Tracer("test")
+
+			ctx, root := tracer.Start(context.Background(), "root", trace.WithSpanKind(trace.SpanKindServer))
+			_, call := tracer.Start(ctx, "inventory.Get", trace.WithSpanKind(tc.kind))
+			call.RecordError(errors.New("rpc error: code = NotFound"))
+			call.SetStatus(codes.Error, "NotFound")
+			call.End()
+			root.End()
+
+			want := 1 // healthy: the root only
+			if tc.trigger {
+				want = 2
+			}
+			if got := len(exporter.GetSpans()); got != want {
+				t.Fatalf("%v span error: %d spans exported, want %d", tc.kind, got, want)
+			}
+		})
+	}
+}
+
 func TestBothHTTPMiddlewareOrdersCoordinateLogsAndTraces(t *testing.T) {
 	for _, order := range []string{"otel_outer", "flightrec_outer"} {
 		t.Run(order, func(t *testing.T) {

@@ -83,6 +83,10 @@ type SpanProcessorOptions struct {
 
 	// DisableExceptionTrigger disables automatic triggering when a span records
 	// an "exception" event. By default, exception events trigger a trace flush.
+	//
+	// Error status and exception events on client and producer spans never
+	// trigger: they describe a call to another service, which decides whether
+	// its own request failed.
 	DisableExceptionTrigger bool
 
 	// Now returns the current time. Defaults to time.Now.
@@ -1050,10 +1054,15 @@ func (sp *SpanProcessor) Shutdown(ctx context.Context) error {
 }
 
 func (sp *SpanProcessor) checkSpanTrigger(s sdktrace.ReadOnlySpan) string {
-	if s.Status().Code == codes.Error {
+	// A client or producer span records the outcome of a call to another
+	// service; instrumentation marks it as an error for answers such as
+	// NotFound. That service decides whether its request failed, and its
+	// flush marker or notice reaches this one as downstream: or remote:.
+	outbound := s.SpanKind() == trace.SpanKindClient || s.SpanKind() == trace.SpanKindProducer
+	if s.Status().Code == codes.Error && !outbound {
 		return "span_error"
 	}
-	if !sp.opts.DisableExceptionTrigger {
+	if !sp.opts.DisableExceptionTrigger && !outbound {
 		for _, ev := range s.Events() {
 			if ev.Name == "exception" {
 				return "span_exception"
