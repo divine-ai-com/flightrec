@@ -1089,19 +1089,35 @@ func enrichSpan(s sdktrace.ReadOnlySpan, extra ...attribute.KeyValue) sdktrace.R
 	}
 }
 
+// spanBaseCost is the heap held by one ended span apart from its attributes,
+// events and links: the SDK's span struct with its contexts, times and status.
+// Measured at about 400 bytes on linux/amd64 with go.opentelemetry.io/otel/sdk
+// v1.47.0 (heap growth over 20,000 buffered spans, see
+// TestSpanAccountingMatchesHeap) and scaled by pointer size for 32-bit
+// platforms, where most of the struct is pointers and words.
+const spanBaseCost = 400 * int(unsafe.Sizeof(uintptr(0))) / 8
+
+var (
+	attrValueSize = int64(unsafe.Sizeof(attribute.KeyValue{}))
+	eventSize     = int64(unsafe.Sizeof(sdktrace.Event{}))
+	linkSize      = int64(unsafe.Sizeof(sdktrace.Link{}))
+)
+
+// estimateSpanPayloadSize estimates the heap a buffered span keeps alive,
+// beyond its slot in the ring.
 func estimateSpanPayloadSize(s sdktrace.ReadOnlySpan) int64 {
-	sz := int64(len(s.Name())) + int64(len(s.Status().Description))
+	sz := int64(spanBaseCost) + int64(len(s.Name())) + int64(len(s.Status().Description))
 	for _, a := range s.Attributes() {
 		sz += estimateOTelAttrSize(a)
 	}
 	for _, ev := range s.Events() {
-		sz += int64(len(ev.Name)) + 24
+		sz += eventSize + int64(len(ev.Name))
 		for _, a := range ev.Attributes {
 			sz += estimateOTelAttrSize(a)
 		}
 	}
 	for _, ln := range s.Links() {
-		sz += 32
+		sz += linkSize
 		for _, a := range ln.Attributes {
 			sz += estimateOTelAttrSize(a)
 		}
@@ -1109,8 +1125,10 @@ func estimateSpanPayloadSize(s sdktrace.ReadOnlySpan) int64 {
 	return sz
 }
 
+// estimateOTelAttrSize counts the attribute.KeyValue itself plus the strings
+// and slices it references.
 func estimateOTelAttrSize(a attribute.KeyValue) int64 {
-	sz := int64(len(a.Key)) + 16
+	sz := attrValueSize + int64(len(a.Key))
 	switch a.Value.Type() {
 	case attribute.STRING:
 		sz += int64(len(a.Value.AsString()))
@@ -1118,8 +1136,12 @@ func estimateOTelAttrSize(a attribute.KeyValue) int64 {
 		for _, s := range a.Value.AsStringSlice() {
 			sz += int64(len(s)) + 16
 		}
-	case attribute.BOOLSLICE, attribute.INT64SLICE, attribute.FLOAT64SLICE:
-		sz += 32
+	case attribute.BOOLSLICE:
+		sz += int64(len(a.Value.AsBoolSlice()))
+	case attribute.INT64SLICE:
+		sz += 8 * int64(len(a.Value.AsInt64Slice()))
+	case attribute.FLOAT64SLICE:
+		sz += 8 * int64(len(a.Value.AsFloat64Slice()))
 	}
 	return sz
 }

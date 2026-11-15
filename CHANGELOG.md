@@ -5,6 +5,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
 ## [Unreleased]
 
 ### Fixed
+- `otelflightrec.SpanProcessor` counts the memory a buffered span really holds (the SDK span itself, and each attribute, event and link), about ten times more than before, so `MaxBytesPerTrace` and `MaxTotalBytes` now limit memory to what they state. Expect more spans to be dropped under the same limits; a `MaxBytesPerTrace` below about 500 bytes now drops even the root span (#66).
 - `otelflightrec.NewLogHandler` writes `uint64` attribute values above the `int64` range as decimal strings instead of wrapping them to negative numbers.
 
 ## [v0.3.0] - 2026-11-15
