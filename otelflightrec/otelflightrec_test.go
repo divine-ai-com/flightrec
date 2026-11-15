@@ -688,3 +688,64 @@ func TestZeroAllocBufferedLogWithActiveSpan(t *testing.T) {
 		t.Fatalf("expected 0 allocs/op when buffering log inside active OTel span, got %v", allocs)
 	}
 }
+
+type recordOnlySampler struct{}
+
+func (recordOnlySampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	return sdktrace.SamplingResult{
+		Decision:   sdktrace.RecordOnly,
+		Tracestate: trace.SpanContextFromContext(p.ParentContext).TraceState(),
+	}
+}
+
+func (recordOnlySampler) Description() string { return "RecordOnly" }
+
+type countingProcessor struct {
+	mu     sync.Mutex
+	starts int
+	ends   int
+}
+
+func (c *countingProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {
+	c.mu.Lock()
+	c.starts++
+	c.mu.Unlock()
+}
+
+func (c *countingProcessor) OnEnd(sdktrace.ReadOnlySpan) {
+	c.mu.Lock()
+	c.ends++
+	c.mu.Unlock()
+}
+
+func (c *countingProcessor) Shutdown(context.Context) error   { return nil }
+func (c *countingProcessor) ForceFlush(context.Context) error { return nil }
+
+func TestUnsampledSpansAreNotTracked(t *testing.T) {
+	next := &countingProcessor{}
+	sp := otelflightrec.NewSpanProcessor(otelflightrec.SpanProcessorOptions{Next: next})
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(recordOnlySampler{}),
+		sdktrace.WithSpanProcessor(sp),
+	)
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	tr := tp.Tracer("test")
+
+	const traces = 1000
+	for i := 0; i < traces; i++ {
+		ctx, root := tr.Start(context.Background(), "root")
+		_, child := tr.Start(ctx, "child")
+		child.End()
+		root.End()
+	}
+
+	st := sp.Stats()
+	if st.ActiveTraces != 0 || st.TracesStarted != 0 || st.BufferedBytes != 0 {
+		t.Fatalf("unsampled traces must not be tracked: %+v", st)
+	}
+	next.mu.Lock()
+	defer next.mu.Unlock()
+	if next.starts != 2*traces || next.ends != 2*traces {
+		t.Fatalf("unsampled spans must pass through to Next: starts=%d ends=%d, want %d each", next.starts, next.ends, 2*traces)
+	}
+}
