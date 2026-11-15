@@ -28,5 +28,11 @@ var ErrNotPrivate = errors.New("journal: not a regular file owned by the current
 // ReadFile always fails on this platform.
 func ReadFile(string, int64) ([]byte, error) { return nil, errUnsupported }
 
+// IncrementAttempts always fails on this platform.
+func IncrementAttempts(string) (uint32, error) { return 0, errUnsupported }
+
+// Discard always fails on this platform.
+func Discard(string) error { return errUnsupported }
+
 // AcquireLock always fails on this platform.
 func AcquireLock(string) (func(), error) { return nil, errUnsupported }

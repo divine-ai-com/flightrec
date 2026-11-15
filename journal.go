@@ -56,6 +56,7 @@ func WithJournalSize(bytes int64) JournalOption { return journalSizeOption(bytes
 // journalState is a running journal.
 type journalState struct {
 	file    *journal.File
+	unlock  func() // releases path.lock
 	records atomic.Uint64
 }
 
@@ -69,6 +70,15 @@ var journalScratch = sync.Pool{New: func() any { b := make([]byte, 0, 512); retu
 // grace period that ran out) does not lose the records of the requests it was
 // handling. Scopes started before StartJournal are not journaled.
 //
+// Before it starts journaling, StartJournal recovers the journal a killed
+// process left at path: for each request that was in flight, it writes the
+// buffered records to Next, in order, with their original time, level and
+// attributes, tagged flightrec.flush_reason=crash_recovery and
+// flightrec.recovered=true, then one "request interrupted by crash" summary.
+// Recovery writes each record at least once: a crash during a flush or during
+// recovery can write some records again on the next start. Problems found
+// while recovering are counted in Stats, never returned.
+//
 // The file is created with mode 0600. A lock file, path.lock, is held while
 // the journal runs; a second process or Recorder using the same path gets an
 // error. The lock file is left in place. It is written with zeros in
@@ -79,11 +89,11 @@ var journalScratch = sync.Pool{New: func() any { b := make([]byte, 0, 512); retu
 //
 // StartJournal returns an error only when no journal can run: an
 // unsupported platform (ErrJournalUnsupported), an invalid size, a journal
-// already running on this Recorder (ErrJournalRunning), or a file that
-// cannot be created. stop stops journaling, zeros the file and removes it.
+// already running on this Recorder (ErrJournalRunning), a path in use by
+// another process or Recorder, or a file that cannot be created. stop stops journaling, zeros the file and removes it.
 // Scopes still open when stop is called are not recovered: call stop after
 // the server has drained its requests. The Journal* fields of Stats describe
-// the running journal and read zero after stop.
+// the running journal and read zero after stop, except the recovery counters.
 func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func() error, err error) {
 	if !journal.Supported {
 		return nil, ErrJournalUnsupported
@@ -110,10 +120,7 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 	if err != nil {
 		return nil, fmt.Errorf("flightrec: start journal: %w", err)
 	}
-	if err := st.prepareJournalPath(path); err != nil {
-		unlock()
-		return nil, err
-	}
+	st.recoverPending(path)
 
 	// Each stripe needs at least two blocks; small journals get fewer stripes.
 	stripes := min(int64(journalStripes), (cfg.size-journal.HeaderSize)/(2*journal.BlockSize))
@@ -128,7 +135,7 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 		unlock()
 		return nil, fmt.Errorf("flightrec: start journal: %w", err)
 	}
-	js := &journalState{file: f}
+	js := &journalState{file: f, unlock: unlock}
 	st.journal.Store(js)
 
 	var once sync.Once
@@ -148,20 +155,27 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 	}, nil
 }
 
-// prepareJournalPath makes path free for a new journal. A file left there by
-// a previous process is moved aside for recovery. The caller holds the lock
-// file.
-func (st *recorderState) prepareJournalPath(path string) error {
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+// recoverPending recovers the journal files a previous process left at path,
+// and leaves path free for a new journal. The caller holds the lock file.
+//
+// A file at path.recovering is from a recovery that did not finish; it is
+// retried first. A file at path is then moved to path.recovering before it is
+// recovered, so a crash during recovery leaves it there for the next start,
+// which counts the attempt.
+func (st *recorderState) recoverPending(path string) {
 	recovering := path + ".recovering"
 	if _, err := os.Lstat(recovering); err == nil {
-		// An earlier recovery did not finish; it is retried, and the newer
-		// file is discarded.
-		return os.Remove(path)
+		st.recoverJournal(recovering)
 	}
-	return os.Rename(path, recovering)
+	if _, err := os.Lstat(path); err != nil {
+		return
+	}
+	if err := os.Rename(path, recovering); err != nil {
+		st.journalDiscarded.Add(1)
+		_ = journal.Discard(path)
+		return
+	}
+	st.recoverJournal(recovering)
 }
 
 // journalStart writes a start entry for a new scope if a journal is running.
@@ -213,6 +227,11 @@ func (st *recorderState) journalEnd(sc *Scope) {
 
 // journalStats fills the journal fields of s.
 func (st *recorderState) journalStats(s *Stats) {
+	s.JournalRecoveredScopes = st.journalRecoveredScopes.Load()
+	s.JournalRecoveredRecords = st.journalRecoveredRecords.Load()
+	s.JournalCorruptEntries = st.journalCorrupt.Load()
+	s.JournalDiscardedFiles = st.journalDiscarded.Load()
+	s.JournalAbandonedRecoveries = st.journalAbandoned.Load()
 	js := st.journal.Load()
 	if js == nil {
 		return

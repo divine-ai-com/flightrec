@@ -109,6 +109,69 @@ func ReadFile(path string, maxSize int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, maxSize))
 }
 
+// openPrivate opens path read-write without following a symlink and checks
+// that it is a regular file owned by the current user.
+func openPrivate(path string) (*os.File, int64, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0) //nolint:gosec // G304: the path is derived from the journal path the application configured
+	if err != nil {
+		return nil, 0, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.Mode().IsRegular() || !ok || int(st.Uid) != os.Getuid() {
+		_ = f.Close()
+		return nil, 0, ErrNotPrivate
+	}
+	return f, fi.Size(), nil
+}
+
+// IncrementAttempts adds one to the recovery attempt counter in the header
+// of the journal file at path and returns the new count. The write reaches
+// the page cache, which survives the death of the process.
+func IncrementAttempts(path string) (uint32, error) {
+	f, _, err := openPrivate(path)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+	b := make([]byte, HeaderSize)
+	if _, err := io.ReadFull(f, b); err != nil {
+		return 0, ErrBadHeader
+	}
+	h, err := DecodeHeader(b)
+	if err != nil {
+		return 0, err
+	}
+	if h.Attempts < ^uint32(0) {
+		h.Attempts++
+	}
+	encodeHeader(b, h)
+	if _, err := f.WriteAt(b, 0); err != nil {
+		return 0, err
+	}
+	return h.Attempts, nil
+}
+
+// Discard overwrites the file at path with zeros, when it is a private
+// regular file, and removes it. The journal holds unredacted debug data.
+func Discard(path string) error {
+	if f, size, err := openPrivate(path); err == nil {
+		zeros := make([]byte, min(size, 1<<20))
+		for off := int64(0); off < size; off += int64(len(zeros)) {
+			n := min(int64(len(zeros)), size-off)
+			if _, err := f.WriteAt(zeros[:n], off); err != nil {
+				break
+			}
+		}
+		_ = f.Close()
+	}
+	return os.Remove(path)
+}
+
 // AcquireLock creates the lock file at path if needed (mode 0600, never
 // through a symlink) and takes an exclusive lock on it. unlock releases it;
 // the file stays.
