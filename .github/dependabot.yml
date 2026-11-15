@@ -7,6 +7,7 @@ updates:
     directories:
       - /grpcflightrec
       - /otelflightrec
+      - /notifier/redisnotifier
     schedule:
       interval: weekly
     open-pull-requests-limit: 0
