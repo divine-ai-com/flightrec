@@ -18,8 +18,8 @@ test: ## Run tests with the race detector in every module.
 	@for m in $(MODULES); do echo "== test $$m"; (cd $$m && go test -race -shuffle=on ./...) || exit 1; done
 
 .PHONY: cover
-cover: ## Write coverage profiles for the core and otelflightrec modules and fail below their minimums.
-	go test -race -covermode=atomic -coverprofile=$(COVERPROFILE) .
+cover: ## Write coverage profiles for the core (with its internal packages) and otelflightrec modules and fail below their minimums.
+	go test -race -covermode=atomic -coverpkg=.,./internal/... -coverprofile=$(COVERPROFILE) . ./internal/...
 	@total=$$(go tool cover -func=$(COVERPROFILE) | awk '/^total:/ {sub("%","",$$3); print $$3}'); \
 	echo "core coverage: $$total% (minimum $(COVER_MIN_CORE)%)"; \
 	awk -v t="$$total" -v m="$(COVER_MIN_CORE)" 'BEGIN { exit (t+0 < m+0) }' || { echo "coverage below minimum"; exit 1; }

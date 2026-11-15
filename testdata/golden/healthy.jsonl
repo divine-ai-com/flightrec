@@ -1,0 +1,1 @@
+{"time":"<time>","level":"INFO","msg":"request completed","flightrec.trace_id":"req-1","duration":<duration>,"flightrec.dropped_records":1,"status":200,"method":"GET","path":"/orders"}

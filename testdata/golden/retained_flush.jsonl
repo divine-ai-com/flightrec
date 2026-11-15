@@ -1,0 +1,2 @@
+{"time":"<time>","level":"INFO","msg":"request completed","flightrec.trace_id":"req-6","duration":<duration>,"flightrec.dropped_records":0,"status":200,"flightrec.retained_records":1}
+{"time":"<time>","level":"DEBUG","msg":"queued email","flightrec.trace_id":"req-6","flightrec.flush_reason":"downstream failure","order":{"id":9,"state":"paid"}}

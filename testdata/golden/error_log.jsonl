@@ -1,0 +1,3 @@
+{"time":"<time>","level":"ERROR","msg":"provider timed out","flightrec.trace_id":"req-2","err":"deadline exceeded"}
+{"time":"<time>","level":"DEBUG","msg":"loaded cart","flightrec.trace_id":"req-2","flightrec.flush_reason":"error_log","items":3}
+{"time":"<time>","level":"INFO","msg":"calling provider","flightrec.trace_id":"req-2","flightrec.flush_reason":"error_log","provider":"acme"}
