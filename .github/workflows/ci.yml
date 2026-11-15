@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [., grpcflightrec, otelflightrec, notifier/redisnotifier]
+        module: [., grpcflightrec, otelflightrec, notifier/redisnotifier, notifier/natsnotifier]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -52,7 +52,7 @@ jobs:
           race=-race
           # The race detector needs cgo; Windows runs the same tests without it.
           if [ "$RUNNER_OS" = "Windows" ]; then race=; fi
-          for m in . grpcflightrec otelflightrec notifier/redisnotifier; do
+          for m in . grpcflightrec otelflightrec notifier/redisnotifier notifier/natsnotifier; do
             echo "::group::$m"
             (cd "$m" && go test $race -shuffle=on ./...) || exit 1
             echo "::endgroup::"
@@ -95,7 +95,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [., grpcflightrec, otelflightrec, notifier/redisnotifier]
+        module: [., grpcflightrec, otelflightrec, notifier/redisnotifier, notifier/natsnotifier]
     steps:
       - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
@@ -111,7 +111,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [grpcflightrec, otelflightrec, notifier/redisnotifier]
+        module: [grpcflightrec, otelflightrec, notifier/redisnotifier, notifier/natsnotifier]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -139,6 +139,6 @@ jobs:
       # One iteration each: this checks the benchmarks run, not their speed.
       - name: Benchmarks compile and run
         run: |
-          for m in . grpcflightrec otelflightrec notifier/redisnotifier; do
+          for m in . grpcflightrec otelflightrec notifier/redisnotifier notifier/natsnotifier; do
             (cd "$m" && go test -run='^$' -bench=. -benchtime=1x ./...) || exit 1
           done
