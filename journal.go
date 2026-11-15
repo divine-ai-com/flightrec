@@ -59,16 +59,19 @@ type journalState struct {
 	records atomic.Uint64
 }
 
+// maxScratch is the largest encode buffer kept for reuse.
+const maxScratch = journal.MaxPayload
+
 var journalScratch = sync.Pool{New: func() any { b := make([]byte, 0, 512); return &b }}
 
 // StartJournal writes the buffered records of every scope to a file at path,
 // so that a process killed without warning (SIGKILL, an out-of-memory kill, a
 // grace period that ran out) does not lose the records of the requests it was
-// handling. The next StartJournal on the same path, in the restarted process,
-// recovers them.
+// handling. Scopes started before StartJournal are not journaled.
 //
-// The file is created with mode 0600 and locked; a second process or
-// Recorder using the same path gets an error. It is written with zeros in
+// The file is created with mode 0600. A lock file, path.lock, is held while
+// the journal runs; a second process or Recorder using the same path gets an
+// error. The lock file is left in place. It is written with zeros in
 // full when created, then written to through a shared memory mapping, which
 // the kernel keeps when the process dies. It does not survive the loss of the
 // machine, and it must be on a volume that outlives the process: in
@@ -78,7 +81,9 @@ var journalScratch = sync.Pool{New: func() any { b := make([]byte, 0, 512); retu
 // unsupported platform (ErrJournalUnsupported), an invalid size, a journal
 // already running on this Recorder (ErrJournalRunning), or a file that
 // cannot be created. stop stops journaling, zeros the file and removes it.
-// Scopes still open when stop is called are not recovered.
+// Scopes still open when stop is called are not recovered: call stop after
+// the server has drained its requests. The Journal* fields of Stats describe
+// the running journal and read zero after stop.
 func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func() error, err error) {
 	if !journal.Supported {
 		return nil, ErrJournalUnsupported
@@ -101,7 +106,12 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 		return nil, ErrJournalRunning
 	}
 
+	unlock, err := journal.AcquireLock(path + ".lock")
+	if err != nil {
+		return nil, fmt.Errorf("flightrec: start journal: %w", err)
+	}
 	if err := st.prepareJournalPath(path); err != nil {
+		unlock()
 		return nil, err
 	}
 
@@ -115,6 +125,7 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 		Host:      host,
 	})
 	if err != nil {
+		unlock()
 		return nil, fmt.Errorf("flightrec: start journal: %w", err)
 	}
 	js := &journalState{file: f}
@@ -126,6 +137,7 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 		once.Do(func() {
 			st.journalMu.Lock()
 			defer st.journalMu.Unlock()
+			defer unlock()
 			st.journal.CompareAndSwap(js, nil)
 			err = f.Close(true)
 			if rmErr := os.Remove(path); err == nil {
@@ -137,18 +149,12 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 }
 
 // prepareJournalPath makes path free for a new journal. A file left there by
-// a previous process is moved aside for recovery.
+// a previous process is moved aside for recovery. The caller holds the lock
+// file.
 func (st *recorderState) prepareJournalPath(path string) error {
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	// A journal still locked belongs to a running process or Recorder; it is
-	// left alone. The lock is held until the file has been moved.
-	unlock, err := journal.LockFile(path)
-	if err != nil {
-		return fmt.Errorf("flightrec: start journal: %w", err)
-	}
-	defer unlock()
 	recovering := path + ".recovering"
 	if _, err := os.Lstat(recovering); err == nil {
 		// An earlier recovery did not finish; it is retried, and the newer
@@ -169,8 +175,7 @@ func (st *recorderState) journalStart(sc *Scope) {
 	bp := journalScratch.Get().(*[]byte)
 	b := appendScopeStart((*bp)[:0], scopeStart{start: sc.startTime, traceID: sc.meta.TraceID, method: sc.meta.Method, path: sc.meta.Path})
 	js.file.Append(sc.jid, journal.KindStart, sc.jid, b)
-	*bp = b
-	journalScratch.Put(bp)
+	putScratch(bp, b)
 }
 
 // journalRecord writes a buffered record of sc to its journal.
@@ -183,6 +188,15 @@ func (st *recorderState) journalRecord(sc *Scope, r *Recorder, rec slog.Record, 
 	b := appendJournalRecord((*bp)[:0], r, rec, tc)
 	if js.file.Append(sc.jid, journal.KindRecord, sc.jid, b) {
 		js.records.Add(1)
+	}
+	putScratch(bp, b)
+}
+
+// putScratch returns an encode buffer to the pool unless it grew past what a
+// journal entry can hold.
+func putScratch(bp *[]byte, b []byte) {
+	if cap(b) > maxScratch {
+		return
 	}
 	*bp = b
 	journalScratch.Put(bp)
@@ -210,6 +224,6 @@ func (st *recorderState) journalStats(s *Stats) {
 	s.JournalDropped = ws.Dropped
 	s.JournalFaults = ws.Faults
 	if oldest := js.file.OldestBlockTime(); oldest > 0 {
-		s.JournalOldestAge = st.now().Sub(time.Unix(0, oldest))
+		s.JournalOldestAge = time.Since(time.Unix(0, oldest)) // the writer stamps blocks with the wall clock
 	}
 }

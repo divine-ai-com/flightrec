@@ -29,7 +29,7 @@ type File struct {
 // must not exist. It is created with mode 0600, written with zeros in full so
 // no page is sparse, and locked with flock so a second writer gets an error.
 func Create(path string, h Header) (*File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600) //nolint:gosec // G304: the path is the journal path the application configured
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ var ErrNotPrivate = errors.New("journal: not a regular file owned by the current
 // ReadFile reads a journal file without mapping it, after checking that it
 // is a regular file owned by the current user and not larger than maxSize.
 func ReadFile(path string, maxSize int64) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0) //nolint:gosec // G304: the path is the journal path the application configured
 	if err != nil {
 		return nil, err
 	}
@@ -109,16 +109,17 @@ func ReadFile(path string, maxSize int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, maxSize))
 }
 
-// LockFile takes an exclusive flock on an existing file and returns a
-// function that releases it. It fails at once if another process holds it.
-func LockFile(path string) (unlock func(), err error) {
-	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+// AcquireLock creates the lock file at path if needed (mode 0600, never
+// through a symlink) and takes an exclusive lock on it. unlock releases it;
+// the file stays.
+func AcquireLock(path string) (unlock func(), err error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600) //nolint:gosec // G304: the path is derived from the journal path the application configured
 	if err != nil {
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("journal: lock %s: %w", path, err)
+		return nil, fmt.Errorf("journal: %s is in use: %w", path, err)
 	}
 	return func() { _ = f.Close() }, nil
 }

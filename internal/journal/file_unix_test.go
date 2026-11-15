@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -31,8 +32,8 @@ func TestFileRoundTripAndPermissions(t *testing.T) {
 	if _, err := Create(path, Header{Size: MinSize(2), Stripes: 2}); err == nil {
 		t.Error("Create over an existing file succeeded")
 	}
-	if _, err := LockFile(path); err == nil {
-		t.Error("LockFile succeeded while the writer holds the lock")
+	if tryFlock(t, path) {
+		t.Error("the journal file is not locked while the writer runs")
 	}
 	if err := j.Close(false); err != nil {
 		t.Fatal(err)
@@ -45,11 +46,33 @@ func TestFileRoundTripAndPermissions(t *testing.T) {
 	if _, entries, _, err := Read(data); err != nil || len(entries) != 10 {
 		t.Fatalf("read %d entries, err %v", len(entries), err)
 	}
-	unlock, err := LockFile(path)
+	if !tryFlock(t, path) {
+		t.Error("the journal file is still locked after Close")
+	}
+	lock := filepath.Join(filepath.Dir(path), "lock")
+	unlock, err := AcquireLock(lock)
 	if err != nil {
-		t.Fatalf("LockFile after Close: %v", err)
+		t.Fatal(err)
+	}
+	if _, err := AcquireLock(lock); err == nil {
+		t.Error("AcquireLock succeeded twice")
 	}
 	unlock()
+	if unlock, err = AcquireLock(lock); err != nil {
+		t.Fatalf("AcquireLock after unlock: %v", err)
+	}
+	unlock()
+}
+
+// tryFlock reports whether an exclusive lock on path can be taken now.
+func tryFlock(t *testing.T, path string) bool {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
 }
 
 func TestCloseZeroes(t *testing.T) {

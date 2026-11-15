@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,6 +165,112 @@ func TestNoJournalWithoutStartJournal(t *testing.T) {
 	}
 }
 
+func TestJournalCodecRoundTrip(t *testing.T) {
+	rec := New(Options{Next: slog.DiscardHandler})
+	r := rec.WithAttrs([]slog.Attr{slog.Float64("rootf", 0.25)}).WithGroup("g").WithAttrs([]slog.Attr{slog.String("ga", "v")}).(*Recorder)
+	far := time.Date(3000, 1, 2, 3, 4, 5, 6, time.UTC)
+	var deep slog.Attr = slog.String("leaf", "x")
+	for range maxGroupDepth + 5 {
+		deep = slog.Group("deep", deep)
+	}
+	record := slog.NewRecord(time.Time{}, slog.LevelWarn, "msg", 0)
+	record.AddAttrs(
+		slog.Float64("f", 1.5),
+		slog.String("after", "s"),
+		slog.Int("n", -7),
+		slog.Uint64("u", 1<<63),
+		slog.Bool("b", true),
+		slog.Duration("d", time.Second),
+		slog.Time("far", far),
+		slog.Time("zero", time.Time{}),
+		slog.Any("err", errors.New("boom")),
+		slog.Any("m", map[string]int{"k": 1}),
+		deep,
+	)
+	payload := appendJournalRecord(nil, r, record, TraceContext{})
+	orig := append([]byte(nil), payload...)
+	jr, err := decodeJournalRecord(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != string(orig) {
+		t.Error("decoding changed its input")
+	}
+	if !jr.time.IsZero() || jr.level != slog.LevelWarn || jr.message != "msg" {
+		t.Errorf("record header %v %v %q", jr.time, jr.level, jr.message)
+	}
+	if jr.rootAttrs[0].Value.Float64() != 0.25 || jr.frames[0].name != "g" || jr.frames[0].attrs[0].Value.String() != "v" {
+		t.Errorf("logger attributes %v %v", jr.rootAttrs, jr.frames)
+	}
+	got := map[string]slog.Value{}
+	for _, a := range jr.attrs {
+		got[a.Key] = a.Value
+	}
+	if got["f"].Float64() != 1.5 || got["after"].String() != "s" || got["n"].Int64() != -7 ||
+		got["u"].Uint64() != 1<<63 || !got["b"].Bool() || got["d"].Duration() != time.Second ||
+		!got["far"].Time().Equal(far) || !got["zero"].Time().IsZero() {
+		t.Errorf("attributes %v", jr.attrs)
+	}
+	if v := got["err"]; v.Kind() != slog.KindString || v.String() != "boom" {
+		t.Errorf("error attribute %v (%v)", v, v.Kind())
+	}
+	if got["m"].String() != `{"k":1}` {
+		t.Errorf("any attribute %v", got["m"])
+	}
+	if got["deep"].Kind() != slog.KindGroup {
+		t.Errorf("deep group kind %v", got["deep"].Kind())
+	}
+
+	s := scopeStart{start: far, traceID: "t", method: "GET", path: "/"}
+	ds, err := decodeScopeStart(appendScopeStart(nil, s))
+	if err != nil || !ds.start.Equal(far) || ds.traceID != "t" || ds.method != "GET" || ds.path != "/" {
+		t.Errorf("scope start %+v, %v", ds, err)
+	}
+}
+
+func TestStopUnderLoadDoesNotFault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j")
+	rec := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug})
+	log := slog.New(rec)
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				ctx, sc := StartScope(context.Background(), rec, ScopeMeta{})
+				log.DebugContext(ctx, "x", "n", 1)
+				sc.End(ctx, 200)
+			}
+		}()
+	}
+	var faults uint64
+	for range 100 {
+		stop, err := rec.StartJournal(path, WithJournalSize(1<<20))
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Microsecond)
+		faults += rec.Stats().JournalFaults
+		js := rec.state.journal.Load()
+		if err := stop(); err != nil {
+			t.Fatal(err)
+		}
+		faults += js.file.Stats().Faults
+	}
+	close(done)
+	wg.Wait()
+	if faults != 0 {
+		t.Errorf("%d memory faults while stopping under load", faults)
+	}
+}
+
 func FuzzDecodeJournalPayloads(f *testing.F) {
 	rec := New(Options{Next: slog.DiscardHandler})
 	r := rec.WithAttrs([]slog.Attr{slog.String("a", "b")}).WithGroup("g").(*Recorder)
@@ -172,7 +279,11 @@ func FuzzDecodeJournalPayloads(f *testing.F) {
 	f.Add(appendJournalRecord(nil, r, record, TraceContext{}))
 	f.Add(appendScopeStart(nil, scopeStart{start: time.Now(), traceID: "t", method: "GET", path: "/"}))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		orig := string(b)
 		_, _ = decodeJournalRecord(b)
 		_, _ = decodeScopeStart(b)
+		if string(b) != orig {
+			t.Fatal("decoding changed its input")
+		}
 	})
 }

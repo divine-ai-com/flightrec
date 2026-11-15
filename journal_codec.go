@@ -27,7 +27,7 @@ type scopeStart struct {
 
 func appendScopeStart(b []byte, s scopeStart) []byte {
 	b = append(b, journalPayloadVersion)
-	b = binary.AppendVarint(b, s.start.UnixNano())
+	b = appendJTime(b, s.start)
 	b = appendJString(b, s.traceID)
 	b = appendJString(b, s.method)
 	return appendJString(b, s.path)
@@ -38,7 +38,7 @@ func decodeScopeStart(b []byte) (scopeStart, error) {
 	if d.byte() != journalPayloadVersion {
 		return scopeStart{}, errBadPayload
 	}
-	s := scopeStart{start: time.Unix(0, d.varint()), traceID: d.string(), method: d.string(), path: d.string()}
+	s := scopeStart{start: d.time(), traceID: d.string(), method: d.string(), path: d.string()}
 	return s, d.err
 }
 
@@ -57,20 +57,20 @@ type journalRecord struct {
 
 func appendJournalRecord(b []byte, r *Recorder, rec slog.Record, tc TraceContext) []byte {
 	b = append(b, journalPayloadVersion)
-	b = binary.AppendVarint(b, rec.Time.UnixNano())
+	b = appendJTime(b, rec.Time)
 	b = binary.AppendVarint(b, int64(rec.Level))
 	b = append(b, tc.TraceID[:]...)
 	b = append(b, tc.SpanID[:]...)
 	b = appendJString(b, rec.Message)
-	b = appendJAttrs(b, r.rootAttrs)
+	b = appendJAttrs(b, r.rootAttrs, 0)
 	b = binary.AppendUvarint(b, uint64(len(r.frames)))
 	for _, f := range r.frames {
 		b = appendJString(b, f.name)
-		b = appendJAttrs(b, f.attrs)
+		b = appendJAttrs(b, f.attrs, 0)
 	}
 	b = binary.AppendUvarint(b, uint64(rec.NumAttrs()))
 	rec.Attrs(func(a slog.Attr) bool {
-		b = appendJAttr(b, a)
+		b = appendJAttr(b, a, 0)
 		return true
 	})
 	return b
@@ -82,7 +82,7 @@ func decodeJournalRecord(b []byte) (journalRecord, error) {
 		return journalRecord{}, errBadPayload
 	}
 	var jr journalRecord
-	jr.time = time.Unix(0, d.varint())
+	jr.time = d.time()
 	jr.level = slog.Level(d.varint())
 	copy(jr.traceCtx.TraceID[:], d.bytes(16))
 	copy(jr.traceCtx.SpanID[:], d.bytes(8))
@@ -114,15 +114,27 @@ func appendJString(b []byte, s string) []byte {
 	return append(b, s...)
 }
 
-func appendJAttrs(b []byte, attrs []slog.Attr) []byte {
+func appendJAttrs(b []byte, attrs []slog.Attr, depth int) []byte {
 	b = binary.AppendUvarint(b, uint64(len(attrs)))
 	for _, a := range attrs {
-		b = appendJAttr(b, a)
+		b = appendJAttr(b, a, depth)
 	}
 	return b
 }
 
-func appendJAttr(b []byte, a slog.Attr) []byte {
+// appendJTime writes t as a flag byte, then Unix seconds and nanoseconds, so
+// every time round-trips, the zero time included (UnixNano covers only the
+// years 1678 to 2262).
+func appendJTime(b []byte, t time.Time) []byte {
+	if t.IsZero() {
+		return append(b, 0)
+	}
+	b = append(b, 1)
+	b = binary.AppendVarint(b, t.Unix())
+	return binary.AppendUvarint(b, uint64(t.Nanosecond()))
+}
+
+func appendJAttr(b []byte, a slog.Attr, depth int) []byte {
 	b = appendJString(b, a.Key)
 	v := a.Value.Resolve()
 	switch v.Kind() {
@@ -150,14 +162,26 @@ func appendJAttr(b []byte, a slog.Attr) []byte {
 		b = binary.AppendVarint(b, int64(v.Duration()))
 	case slog.KindTime:
 		b = append(b, tagTime)
-		b = binary.AppendVarint(b, v.Time().UnixNano())
+		b = appendJTime(b, v.Time())
 	case slog.KindGroup:
+		if depth >= maxGroupDepth {
+			// Deeper than the decoder accepts: kept as text.
+			b = append(b, tagString)
+			b = appendJString(b, v.String())
+			break
+		}
 		b = append(b, tagGroup)
-		b = appendJAttrs(b, v.Group())
+		b = appendJAttrs(b, v.Group(), depth+1)
 	default:
-		// slog.Any: the same copy retention takes, held as JSON text.
-		b = append(b, tagJSON)
-		b = appendJString(b, snapshotAny(v.Any()).String())
+		// slog.Any: the same copy retention takes. Errors and values JSON
+		// cannot encode come back as strings; the rest is JSON text.
+		sv := snapshotAny(v.Any())
+		if sv.Kind() == slog.KindString {
+			b = append(b, tagString)
+		} else {
+			b = append(b, tagJSON)
+		}
+		b = appendJString(b, sv.String())
 	}
 	return b
 }
@@ -230,6 +254,24 @@ func (d *decoder) count() int {
 
 func (d *decoder) string() string { return string(d.bytes(d.count())) }
 
+func (d *decoder) time() time.Time {
+	switch d.byte() {
+	case 0:
+		return time.Time{}
+	case 1:
+		sec := d.varint()
+		nsec := d.uvarint()
+		if nsec >= 1e9 {
+			d.fail()
+			return time.Time{}
+		}
+		return time.Unix(sec, int64(nsec))
+	default:
+		d.fail()
+		return time.Time{}
+	}
+}
+
 // maxGroupDepth bounds nested groups in decoded attributes.
 const maxGroupDepth = 32
 
@@ -239,7 +281,9 @@ func (d *decoder) attrs(depth int) []slog.Attr {
 		d.fail()
 		return nil
 	}
-	out := make([]slog.Attr, 0, n)
+	// Each attribute takes at least two bytes; capping the preallocation
+	// keeps a hostile count from allocating far more than the payload.
+	out := make([]slog.Attr, 0, min(n, 16))
 	for i := 0; i < n && d.err == nil; i++ {
 		key := d.string()
 		var v slog.Value
@@ -251,13 +295,15 @@ func (d *decoder) attrs(depth int) []slog.Attr {
 		case tagUint:
 			v = slog.Uint64Value(d.uvarint())
 		case tagFloat:
-			v = slog.Float64Value(math.Float64frombits(binary.LittleEndian.Uint64(append(d.bytes(8), make([]byte, 8)...))))
+			if p := d.bytes(8); p != nil {
+				v = slog.Float64Value(math.Float64frombits(binary.LittleEndian.Uint64(p)))
+			}
 		case tagBool:
 			v = slog.BoolValue(d.byte() == 1)
 		case tagDuration:
 			v = slog.DurationValue(time.Duration(d.varint()))
 		case tagTime:
-			v = slog.TimeValue(time.Unix(0, d.varint()))
+			v = slog.TimeValue(d.time())
 		case tagGroup:
 			v = slog.GroupValue(d.attrs(depth + 1)...)
 		case tagJSON:
