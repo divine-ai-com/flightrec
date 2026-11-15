@@ -1,0 +1,1 @@
+{"time":"<time>","level":"DEBUG","msg":"step","flightrec.trace_id":"req-3","flightrec.flush_reason":"http_503","service":"checkout","req":{"n":1,"order":{"id":7,"state":"new"}}}

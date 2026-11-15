@@ -1,0 +1,2 @@
+{"time":"<time>","level":"DEBUG","msg":"small-1","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500","flightrec.truncated":true,"flightrec.dropped_records":1}
+{"time":"<time>","level":"DEBUG","msg":"small-2","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500"}

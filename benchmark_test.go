@@ -5,8 +5,10 @@ package flightrec_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -290,3 +292,37 @@ func BenchmarkParallel_NoNotifier(b *testing.B) { benchParallelRequests(b, false
 
 // BenchmarkParallel_Notifier adds an attached in-memory notifier.
 func BenchmarkParallel_Notifier(b *testing.B) { benchParallelRequests(b, true) }
+
+// BenchmarkFlightRec_Journaled is BenchmarkFlightRec_BufferedAndDropped with
+// StartJournal on: every buffered record is also encoded into the journal.
+func BenchmarkFlightRec_Journaled(b *testing.B) {
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewJSONHandler(io.Discard, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+	})
+	stop, err := rec.StartJournal(filepath.Join(b.TempDir(), "journal"))
+	if errors.Is(err, flightrec.ErrJournalUnsupported) {
+		b.Skip("journal not supported on this platform")
+	}
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = stop() }()
+	logger := slog.New(rec)
+	bg := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx, sc := flightrec.StartScope(bg, rec, flightrec.ScopeMeta{
+			TraceID: "0123456789abcdef0123456789abcdef",
+			Method:  "GET",
+			Path:    "/api/orders",
+		})
+		for j := 0; j < logsPerRequest; j++ {
+			logger.DebugContext(ctx, "db query executed", "table", "orders", "rows", j, "cached", true)
+		}
+		sc.End(ctx, 200)
+	}
+}
