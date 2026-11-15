@@ -4,6 +4,7 @@
 package flightrec
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/divine-ai-com/flightrec/internal/notify"
 	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
 
@@ -39,7 +41,6 @@ type Notifier interface {
 
 const (
 	notifierQueueSize      = 1024
-	notifierBatchSize      = 64
 	notifierPublishTimeout = time.Second
 	notifierPublishRate    = 100 // messages per second
 	notifierPublishBurst   = 200
@@ -49,9 +50,6 @@ const (
 	notifierRecentTTL      = 30 * time.Second
 	notifierBackoffMin     = 100 * time.Millisecond
 	notifierBackoffMax     = 30 * time.Second
-	notifierMessageVersion = 1
-	notifierMaxMessageSize = 64 << 10
-	notifierMaxSignedSize  = notifierMaxMessageSize*4/3 + 256 // base64 and the envelope
 )
 
 // NotifierOption configures StartNotifier.
@@ -62,20 +60,6 @@ type NotifierOption interface {
 // notifierConfig holds settings from NotifierOption values.
 type notifierConfig struct {
 	keys [][]byte // signing key first, then keys accepted for verification
-}
-
-// notice is one flushed trace in a notifier message.
-type notice struct {
-	TraceID string `json:"t"`
-	Reason  string `json:"r"`
-}
-
-// notifierMessage is the wire format. Fields are short because every
-// process in a fleet receives every message.
-type notifierMessage struct {
-	Version int      `json:"v"`
-	Origin  string   `json:"o"`
-	Notices []notice `json:"n"`
 }
 
 const activeShards = 32
@@ -102,18 +86,18 @@ type notifierHub struct {
 	origin string
 	keys   [][]byte // WithSigningKey: signing key first
 
-	outbox  chan notice
-	inbox   chan notice
-	publish *tokenBucket
-	deliver *tokenBucket
+	outbox  chan notify.Notice
+	inbox   chan notify.Notice
+	publish *notify.TokenBucket
+	deliver *notify.TokenBucket
 
 	// active indexes running scopes by trace ID, sharded so that starting
 	// and ending scopes on many goroutines does not contend on one lock.
 	active [activeShards]activeShard
 
 	mu        sync.Mutex
-	published *recentSet // trace IDs this process already announced
-	received  *recentSet // trace IDs announced by other processes
+	published *notify.RecentSet // trace IDs this process already announced
+	received  *notify.RecentSet // trace IDs announced by other processes
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -155,12 +139,12 @@ func (r *Recorder) StartNotifier(ctx context.Context, n Notifier, opts ...Notifi
 		n:         n,
 		origin:    newOriginID(),
 		keys:      cfg.keys,
-		outbox:    make(chan notice, notifierQueueSize),
-		inbox:     make(chan notice, notifierQueueSize),
-		publish:   newTokenBucket(notifierPublishRate, notifierPublishBurst, st.now),
-		deliver:   newTokenBucket(notifierDeliveryRate, notifierDeliveryBurst, st.now),
-		published: newRecentSet(notifierRecentSize, notifierRecentTTL, st.now),
-		received:  newRecentSet(notifierRecentSize, notifierRecentTTL, st.now),
+		outbox:    make(chan notify.Notice, notifierQueueSize),
+		inbox:     make(chan notify.Notice, notifierQueueSize),
+		publish:   notify.NewTokenBucket(notifierPublishRate, notifierPublishBurst, st.now),
+		deliver:   notify.NewTokenBucket(notifierDeliveryRate, notifierDeliveryBurst, st.now),
+		published: notify.NewRecentSet(notifierRecentSize, notifierRecentTTL, st.now),
+		received:  notify.NewRecentSet(notifierRecentSize, notifierRecentTTL, st.now),
 		cancel:    cancel,
 	}
 	st.hub.Store(h)
@@ -213,7 +197,7 @@ func (h *notifierHub) scopeStarted(sc *Scope, traceID string) {
 func (h *notifierHub) announced(traceID string) (string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.received.get(traceID)
+	return h.received.Get(traceID)
 }
 
 // scopeRekeyed moves an active scope to its new trace ID, or, when the old ID
@@ -246,9 +230,9 @@ func (h *notifierHub) scopeEnded(sc *Scope, traceID string, triggered bool, reas
 // trace, from another process or a local failure, was handled.
 func (h *notifierHub) afterRetain(traceID string) {
 	h.mu.Lock()
-	reason, ok := h.received.get(traceID)
+	reason, ok := h.received.Get(traceID)
 	if !ok {
-		reason, ok = h.published.get(traceID)
+		reason, ok = h.published.Get(traceID)
 	}
 	h.mu.Unlock()
 	if !ok {
@@ -298,9 +282,9 @@ func (h *notifierHub) localTrigger(traceID, reason string) {
 	}
 	value, _ := MarkerValue(reason)
 	h.mu.Lock()
-	_, already := h.published.get(traceID)
+	_, already := h.published.Get(traceID)
 	if !already {
-		h.published.add(traceID, value)
+		h.published.Add(traceID, value)
 	}
 	h.mu.Unlock()
 	if already {
@@ -310,7 +294,7 @@ func (h *notifierHub) localTrigger(traceID, reason string) {
 		h.st.remoteFlushes.Add(uint64(n))
 	}
 	select {
-	case h.outbox <- notice{TraceID: traceID, Reason: value}:
+	case h.outbox <- notify.Notice{TraceID: traceID, Reason: value}:
 	default:
 		h.st.notifierPublishDropped.Add(1)
 	}
@@ -320,7 +304,7 @@ func (h *notifierHub) localTrigger(traceID, reason string) {
 func (h *notifierHub) runPublisher(ctx context.Context) {
 	defer h.wg.Done()
 	for {
-		var batch []notice
+		var batch []notify.Notice
 		select {
 		case <-ctx.Done():
 			return
@@ -328,7 +312,7 @@ func (h *notifierHub) runPublisher(ctx context.Context) {
 			batch = append(batch, first)
 		}
 	fill:
-		for len(batch) < notifierBatchSize {
+		for len(batch) < notify.MaxBatch {
 			select {
 			case next := <-h.outbox:
 				batch = append(batch, next)
@@ -338,11 +322,11 @@ func (h *notifierHub) runPublisher(ctx context.Context) {
 		}
 		// Wait for a token rather than dropping: notices keep queueing and
 		// batching meanwhile, and the bounded queue does the dropping.
-		if !h.publish.wait(ctx) {
+		if !h.publish.Wait(ctx) {
 			return
 		}
 	refill:
-		for len(batch) < notifierBatchSize {
+		for len(batch) < notify.MaxBatch {
 			select {
 			case next := <-h.outbox:
 				batch = append(batch, next)
@@ -350,13 +334,13 @@ func (h *notifierHub) runPublisher(ctx context.Context) {
 				break refill
 			}
 		}
-		msg, err := json.Marshal(notifierMessage{Version: notifierMessageVersion, Origin: h.origin, Notices: batch})
+		msg, err := json.Marshal(notify.Message{Version: notify.Version, Origin: h.origin, Notices: batch})
 		if err != nil {
 			h.st.notifierPublishErrors.Add(uint64(len(batch)))
 			continue
 		}
 		if len(h.keys) > 0 {
-			msg = signNotifierMessage(h.keys[0], msg, h.st.now())
+			msg = notify.Sign(h.keys[0], msg, h.st.now())
 		}
 		pctx, cancel := context.WithTimeout(ctx, notifierPublishTimeout)
 		err = h.n.Publish(pctx, msg)
@@ -402,24 +386,24 @@ func (h *notifierHub) runSubscriber(ctx context.Context) {
 // receive decodes a message from the Notifier and queues its notices. It
 // runs on the backend's goroutine, so it never blocks.
 func (h *notifierHub) receive(msg []byte) {
-	if len(msg) > notifierMaxSignedSize {
+	if len(msg) > notify.MaxSignedSize {
 		h.st.notifierRejected.Add(1)
 		return
 	}
 	if len(h.keys) > 0 {
-		payload, ok := openNotifierMessage(h.keys, msg, h.st.now())
+		payload, ok := notify.Open(h.keys, msg, h.st.now())
 		if !ok {
 			h.st.notifierRejected.Add(1)
 			return
 		}
 		msg = payload
 	}
-	if len(msg) > notifierMaxMessageSize {
+	if len(msg) > notify.MaxMessageSize {
 		h.st.notifierRejected.Add(1)
 		return
 	}
-	var m notifierMessage
-	if err := json.Unmarshal(msg, &m); err != nil || m.Version != notifierMessageVersion || len(m.Notices) > notifierBatchSize {
+	var m notify.Message
+	if err := json.Unmarshal(msg, &m); err != nil || m.Version != notify.Version || len(m.Notices) > notify.MaxBatch {
 		h.st.notifierRejected.Add(1)
 		return
 	}
@@ -453,15 +437,15 @@ func (h *notifierHub) runDelivery(ctx context.Context) {
 	}
 }
 
-func (h *notifierHub) apply(n notice) {
+func (h *notifierHub) apply(n notify.Notice) {
 	h.mu.Lock()
-	if _, seen := h.received.get(n.TraceID); seen {
+	if _, seen := h.received.Get(n.TraceID); seen {
 		h.mu.Unlock()
 		return
 	}
 	// Recorded even when nothing matches now, so scopes that start or end
 	// shortly after are triggered.
-	h.received.add(n.TraceID, n.Reason)
+	h.received.Add(n.TraceID, n.Reason)
 	h.mu.Unlock()
 
 	scopes := h.activeScopes(n.TraceID)
@@ -470,7 +454,7 @@ func (h *notifierHub) apply(n notice) {
 	}
 	// The budget limits flushing work, not notices about traces this
 	// process never saw.
-	if !h.deliver.take() {
+	if !h.deliver.Take() {
 		h.st.notifierDeliveryDropped.Add(1)
 		return
 	}
@@ -485,89 +469,40 @@ func (h *notifierHub) apply(n notice) {
 	h.st.remoteFlushes.Add(flushed)
 }
 
-// recentSet remembers keys for a fixed time, up to a fixed count, evicting
-// the oldest first. It is not safe for concurrent use.
-type recentSet struct {
-	ttl   time.Duration
-	limit int
-	now   func() time.Time
-	items map[string]recentItem
-	order []string
-}
+type signingKeyOption struct{ keys [][]byte }
 
-type recentItem struct {
-	value string
-	at    time.Time
-}
+func (o signingKeyOption) applyNotifier(c *notifierConfig) { c.keys = o.keys }
 
-func newRecentSet(limit int, ttl time.Duration, now func() time.Time) *recentSet {
-	return &recentSet{ttl: ttl, limit: limit, now: now, items: make(map[string]recentItem)}
-}
-
-func (r *recentSet) get(key string) (string, bool) {
-	it, ok := r.items[key]
-	if !ok || r.now().Sub(it.at) > r.ttl {
-		return "", false
-	}
-	return it.value, true
-}
-
-func (r *recentSet) add(key, value string) {
-	now := r.now()
-	for len(r.order) > 0 {
-		oldest := r.order[0]
-		it := r.items[oldest]
-		if len(r.items) < r.limit && now.Sub(it.at) <= r.ttl {
-			break
-		}
-		r.order = r.order[1:]
-		delete(r.items, oldest)
-	}
-	if _, exists := r.items[key]; !exists {
-		r.order = append(r.order, key)
-	}
-	r.items[key] = recentItem{value: value, at: now}
-}
-
-// tokenBucket is a simple rate limiter.
-type tokenBucket struct {
-	mu     sync.Mutex
-	rate   float64
-	burst  float64
-	tokens float64
-	last   time.Time
-	now    func() time.Time
-}
-
-func newTokenBucket(rate, burst int, now func() time.Time) *tokenBucket {
-	return &tokenBucket{rate: float64(rate), burst: float64(burst), tokens: float64(burst), last: now(), now: now}
-}
-
-// wait blocks until a token is available or ctx is done, and reports whether
-// it got a token.
-func (b *tokenBucket) wait(ctx context.Context) bool {
-	for !b.take() {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(time.Duration(float64(time.Second) / b.rate)):
+// WithSigningKey authenticates notifier messages. Every message is signed
+// with key (HMAC-SHA256, with a timestamp), and a message is accepted only
+// if it is signed with key or one of verifyAlso and is at most two minutes
+// old. Unsigned, forged and stale messages are dropped and counted in
+// Stats.NotifierRejected.
+//
+// Without it, anyone who can publish on the notifier's channel can make
+// every service flush or trigger scopes for any trace ID. Use the same key,
+// at least 32 random bytes (not 32 characters of a password), in every
+// process on the channel; WithSigningKey panics on a shorter key.
+//
+// Signed and unsigned processes reject each other's messages, so enable
+// signing on every process of a channel in one deploy (or move to a new
+// channel). To rotate keys with rolling deploys, take three steps, each
+// rolled out everywhere before the next:
+//
+//  1. WithSigningKey(old, new): sign with old, accept both.
+//  2. WithSigningKey(new, old): sign with new, accept both.
+//  3. WithSigningKey(new).
+func WithSigningKey(key []byte, verifyAlso ...[]byte) NotifierOption {
+	keys := [][]byte{key}
+	keys = append(keys, verifyAlso...)
+	for _, k := range keys {
+		if len(k) < notify.MinKeyLen {
+			panic("flightrec: notifier signing key shorter than 32 bytes")
 		}
 	}
-	return true
-}
-
-func (b *tokenBucket) take() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	now := b.now()
-	b.tokens += now.Sub(b.last).Seconds() * b.rate
-	if b.tokens > b.burst {
-		b.tokens = b.burst
+	cp := make([][]byte, len(keys))
+	for i, k := range keys {
+		cp[i] = bytes.Clone(k)
 	}
-	b.last = now
-	if b.tokens < 1 {
-		return false
-	}
-	b.tokens--
-	return true
+	return signingKeyOption{keys: cp}
 }
