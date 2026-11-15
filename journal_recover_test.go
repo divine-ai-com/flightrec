@@ -10,6 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -127,7 +129,7 @@ func TestRecoverInterruptedScopes(t *testing.T) {
 	if _, err := os.Lstat(path + ".recovering"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("recovering file left: %v", err)
 	}
-	if st.JournalBytesWritten == 0 && rec.state.journal.Load() == nil {
+	if rec.state.journal.Load() == nil {
 		t.Error("no journal running after recovery")
 	}
 }
@@ -180,11 +182,7 @@ func TestRecoveryAttemptsAreLimited(t *testing.T) {
 	if err := os.Rename(path, path+".recovering"); err != nil {
 		t.Fatal(err)
 	}
-	for range maxRecoveryAttempts {
-		if _, err := journal.IncrementAttempts(path + ".recovering"); err != nil {
-			t.Fatal(err)
-		}
-	}
+	bumpAttempts(t, path+".recovering", maxRecoveryAttempts)
 	var out lineBuffer
 	rec := New(Options{Next: slog.NewJSONHandler(&out, nil)})
 	stop, err := rec.StartJournal(path, WithJournalSize(1<<20))
@@ -243,23 +241,192 @@ func TestRecoverBothPendingFiles(t *testing.T) {
 	}
 }
 
-func TestRecoverDiscardsBadFiles(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "j")
-	if err := os.WriteFile(path, bytes.Repeat([]byte("not a journal "), 1000), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	rec := New(Options{Next: slog.DiscardHandler})
-	stop, err := rec.StartJournal(path, WithJournalSize(1<<20))
+// bumpAttempts counts n recovery attempts in the journal file at path.
+func bumpAttempts(t *testing.T, path string, n int) {
+	t.Helper()
+	r, err := journal.OpenRecovering(path, maxJournalSize)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = stop()
-	if st := rec.Stats(); st.JournalDiscardedFiles != 1 {
+	defer r.Close()
+	for range n {
+		if _, err := r.IncrementAttempts(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// crashedJournal leaves a journal at path with one open scope per trace ID,
+// started in order, each holding one record.
+func crashedJournal(t *testing.T, path string, traces ...string) {
+	t.Helper()
+	r := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug})
+	if _, err := r.StartJournal(path, WithJournalSize(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tr := range traces {
+		ctx, _ := StartScope(context.Background(), r, ScopeMeta{TraceID: tr})
+		slog.New(r).DebugContext(ctx, "x", "trace", tr)
+	}
+	crash(t, r)
+}
+
+func recoverInto(t *testing.T, path string, h slog.Handler) (*Recorder, error) {
+	t.Helper()
+	rec := New(Options{Next: h})
+	stop, err := rec.StartJournal(path, WithJournalSize(1<<20))
+	if err == nil {
+		t.Cleanup(func() { _ = stop() })
+	}
+	return rec, err
+}
+
+func TestRecoveryRetriesBeforeTheLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j")
+	crashedJournal(t, path, "a")
+	if err := os.Rename(path, path+".recovering"); err != nil {
+		t.Fatal(err)
+	}
+	bumpAttempts(t, path+".recovering", maxRecoveryAttempts-1)
+	var out lineBuffer
+	rec, err := recoverInto(t, path, slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := rec.Stats(); st.JournalRecoveredScopes != 1 || st.JournalRecoveredRecords != 1 || st.JournalAbandonedRecoveries != 0 {
+		t.Errorf("stats %+v", st)
+	}
+}
+
+func TestRecoveryOrderAndEmptyScopes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j")
+	r := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug})
+	if _, err := r.StartJournal(path, WithJournalSize(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	// Eight scopes land in different stripes; their start order must hold.
+	var want []any
+	for i := range 8 {
+		tr := fmt.Sprintf("scope-%d", i)
+		want = append(want, tr)
+		ctx, _ := StartScope(context.Background(), r, ScopeMeta{TraceID: tr})
+		if i != 3 { // scope-3 is interrupted before logging anything
+			slog.New(r).DebugContext(ctx, "x")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	crash(t, r)
+
+	var out lineBuffer
+	rec, err := recoverInto(t, path, slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []any
+	for _, l := range out.lines(t) {
+		if l["msg"] == "request interrupted by crash" {
+			got = append(got, l["flightrec.trace_id"])
+			if l["flightrec.trace_id"] == "scope-3" && l["flightrec.recovered_records"] != float64(0) {
+				t.Errorf("empty scope summary %v", l)
+			}
+		}
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("order %v, want %v", got, want)
+	}
+	if st := rec.Stats(); st.JournalRecoveredScopes != 8 || st.JournalRecoveredRecords != 7 {
+		t.Errorf("stats %+v", st)
+	}
+}
+
+// panicky panics on its second record.
+type panicky struct{ n int }
+
+func (h *panicky) Enabled(context.Context, slog.Level) bool { return true }
+func (h *panicky) Handle(context.Context, slog.Record) error {
+	if h.n++; h.n == 2 {
+		panic("boom")
+	}
+	return nil
+}
+func (h *panicky) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *panicky) WithGroup(string) slog.Handler      { return h }
+
+func TestRecoverySurvivesAPanickingHandler(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j")
+	crashedJournal(t, path, "a", "b", "c")
+	h := &panicky{}
+	rec, err := recoverInto(t, path, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Three records and three summaries; the first summary panicked.
+	if st := rec.Stats(); h.n != 6 || st.JournalRecoveryErrors != 1 || st.JournalRecoveredScopes != 3 || st.JournalRecoveredRecords != 3 {
+		t.Errorf("handled %d; stats %+v", h.n, rec.Stats())
+	}
+}
+
+func TestRecoverLeavesForeignFiles(t *testing.T) {
+	t.Run("not a journal", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "j")
+		data := bytes.Repeat([]byte("precious "), 1000)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := recoverInto(t, path, slog.DiscardHandler); err == nil {
+			t.Error("StartJournal over a foreign file succeeded")
+		}
+		if b, _ := os.ReadFile(path); !bytes.Equal(b, data) {
+			t.Error("foreign file changed")
+		}
+	})
+	t.Run("hard link", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "j")
+		crashedJournal(t, path, "a")
+		keep := filepath.Join(dir, "keep")
+		if err := os.Link(path, keep); err != nil {
+			t.Fatal(err)
+		}
+		before, _ := os.ReadFile(keep)
+		if _, err := recoverInto(t, path, slog.DiscardHandler); err == nil {
+			t.Error("StartJournal over a hard link succeeded")
+		}
+		if after, _ := os.ReadFile(keep); !bytes.Equal(before, after) {
+			t.Error("hard-linked file changed")
+		}
+	})
+	t.Run("directory at recovering", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "j")
+		crashedJournal(t, path, "a")
+		if err := os.MkdirAll(filepath.Join(path+".recovering", "x"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := recoverInto(t, path, slog.DiscardHandler); err == nil {
+			t.Error("StartJournal with a directory in the way succeeded")
+		}
+		if journal.Classify(path) != journal.ClassJournal {
+			t.Error("the crashed journal was not kept for a later recovery")
+		}
+	})
+}
+
+func TestRecoverRemovesDeadFilesAndSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "j")
+	// A journal whose creation was cut short: zeros only.
+	if err := os.WriteFile(path, make([]byte, 1<<16), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := recoverInto(t, path, slog.DiscardHandler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := rec.Stats(); st.JournalDiscardedFiles != 0 || st.JournalRecoveredScopes != 0 {
 		t.Errorf("stats %+v", st)
 	}
 
-	// A symlink is removed, never followed.
+	path = filepath.Join(dir, "j2")
 	target := filepath.Join(dir, "target")
 	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
@@ -267,15 +434,56 @@ func TestRecoverDiscardsBadFiles(t *testing.T) {
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
-	stop, err = rec.StartJournal(path, WithJournalSize(1<<20))
+	rec, err = recoverInto(t, path, slog.DiscardHandler)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = stop()
 	if b, _ := os.ReadFile(target); string(b) != "keep" {
 		t.Errorf("symlink target changed: %q", b)
 	}
-	if st := rec.Stats(); st.JournalDiscardedFiles != 2 {
+	if st := rec.Stats(); st.JournalDiscardedFiles != 1 {
 		t.Errorf("stats %+v", st)
 	}
+}
+
+func FuzzRecoverJournal(f *testing.F) {
+	dir := f.TempDir()
+	seed := filepath.Join(dir, "seed")
+	jf, err := journal.Create(seed, journal.Header{Size: journal.MinSize(1), Stripes: 1, Host: "h"})
+	if err != nil {
+		f.Fatal(err)
+	}
+	rec0 := New(Options{Next: slog.DiscardHandler}).WithGroup("g").(*Recorder)
+	r := slog.NewRecord(time.Unix(1, 0), slog.LevelDebug, "m", 0)
+	r.AddAttrs(slog.Int("n", 1), slog.Float64("f", 2), slog.Group("x", slog.String("y", "z")))
+	jf.Append(1, journal.KindStart, 1, appendScopeStart(nil, scopeStart{start: time.Unix(1, 0), traceID: "t", method: "GET", path: "/"}))
+	jf.Append(1, journal.KindRecord, 1, appendJournalRecord(nil, rec0, r, TraceContext{}))
+	jf.Append(2, journal.KindRecord, 2, appendJournalRecord(nil, rec0, r, TraceContext{}))
+	jf.Append(2, journal.KindEnd, 2, nil)
+	if err := jf.Close(false); err != nil {
+		f.Fatal(err)
+	}
+	data, err := os.ReadFile(seed)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(data[:journal.HeaderSize+2*1024])
+	f.Fuzz(func(t *testing.T, b []byte) {
+		path := filepath.Join(t.TempDir(), "j")
+		// Fuzz the start of a valid journal, keeping its size.
+		full := append([]byte(nil), data...)
+		copy(full, b)
+		if err := os.WriteFile(path, full, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rec := New(Options{Next: slog.NewJSONHandler(io.Discard, nil)})
+		stop, err := rec.StartJournal(path, WithJournalSize(1<<20))
+		if err != nil {
+			if journal.Classify(path) != journal.ClassOther {
+				t.Fatalf("StartJournal: %v", err)
+			}
+			return
+		}
+		_ = stop()
+	})
 }

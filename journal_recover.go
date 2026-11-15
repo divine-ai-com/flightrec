@@ -6,7 +6,10 @@ package flightrec
 import (
 	"cmp"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"time"
 
@@ -20,11 +23,60 @@ const maxRecoveryAttempts = 3
 // flushReasonCrashRecovery is the flush reason of recovered records.
 const flushReasonCrashRecovery = "crash_recovery"
 
-// recoveredScope collects the entries of one scope read from a journal.
+// recoverPending recovers the journal files a previous process left at path,
+// and leaves path free for a new journal. The caller holds the lock file.
+//
+// A file at path.recovering is from a recovery that did not finish; it is
+// retried first. A file at path is then moved to path.recovering before it is
+// recovered, so a crash during recovery leaves it there for the next start,
+// which counts the attempt. If it cannot be moved, it is recovered in place;
+// the attempt counter is in the file itself.
+//
+// It returns an error only when a file that is not a journal is in the way,
+// or a recovered file cannot be removed: deleting it is not ours to do, and
+// leaving it would block every later recovery.
+func (st *recorderState) recoverPending(path string) error {
+	recovering := path + ".recovering"
+	if err := st.recoverFile(recovering); err != nil {
+		return err
+	}
+	switch journal.Classify(path) {
+	case journal.ClassMissing:
+		return nil
+	case journal.ClassJournal:
+		if os.Rename(path, recovering) == nil {
+			return st.recoverFile(recovering)
+		}
+	}
+	return st.recoverFile(path)
+}
+
+// recoverFile recovers the journal file at path, if there is one, then zeros
+// and removes it.
+func (st *recorderState) recoverFile(path string) error {
+	switch journal.Classify(path) {
+	case journal.ClassMissing:
+		return nil
+	case journal.ClassSymlink:
+		st.journalDiscarded.Add(1)
+	case journal.ClassDead:
+		// Creation or zeroing was cut short: nothing to recover.
+	case journal.ClassJournal:
+		st.recoverJournal(path)
+	default:
+		return fmt.Errorf("flightrec: start journal: %s is in the way and is not a journal file; remove it", path)
+	}
+	if err := journal.Discard(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("flightrec: start journal: remove %s: %w", path, err)
+	}
+	return nil
+}
+
+// recoveredScope is one interrupted scope read from a journal.
 type recoveredScope struct {
+	id      uint64
 	start   scopeStart
 	started bool // the start entry survived
-	ended   bool
 	records []journalRecord
 }
 
@@ -37,12 +89,22 @@ func (sc *recoveredScope) first() time.Time {
 	return sc.records[0].time
 }
 
-// recoverJournal recovers the scopes left open in the journal file at path,
-// then zeros and removes the file. Problems are counted, never returned:
-// recovery must not stop the service from starting.
+// recoverJournal writes the scopes left open in the journal file at path to
+// Next. Problems are counted, never returned: recovery must not stop the
+// service from starting.
+//
+// The file is read one stripe at a time. A scope's entries all sit in one
+// stripe, in the order they were written, so a first pass over a stripe finds
+// the scopes that ended and a second decodes only the others: memory stays at
+// one stripe plus the interrupted scopes.
 func (st *recorderState) recoverJournal(path string) {
-	defer func() { _ = journal.Discard(path) }()
-	attempts, err := journal.IncrementAttempts(path)
+	r, err := journal.OpenRecovering(path, maxJournalSize)
+	if err != nil {
+		st.journalDiscarded.Add(1)
+		return
+	}
+	defer func() { _ = r.Close() }()
+	attempts, err := r.IncrementAttempts()
 	if err != nil {
 		st.journalDiscarded.Add(1)
 		return
@@ -51,59 +113,60 @@ func (st *recorderState) recoverJournal(path string) {
 		st.journalAbandoned.Add(1)
 		return
 	}
-	data, err := journal.ReadFile(path, maxJournalSize)
-	if err != nil {
-		st.journalDiscarded.Add(1)
-		return
-	}
+
 	// The old file's header gives its size and layout, so a changed
 	// WithJournalSize does not lose it.
-	h, entries, rs, err := journal.Read(data)
-	if err != nil {
-		st.journalDiscarded.Add(1)
-		return
-	}
-	st.journalCorrupt.Add(uint64(rs.Invalid))
-
-	scopes := map[uint64]*recoveredScope{}
-	for _, e := range entries {
-		sc := scopes[e.Scope]
-		if sc == nil {
-			sc = &recoveredScope{}
-			scopes[e.Scope] = sc
-		}
-		switch e.Kind {
-		case journal.KindStart:
-			s, err := decodeScopeStart(e.Payload)
-			if err != nil {
-				st.journalCorrupt.Add(1)
-				continue
+	h := r.Header
+	var open []*recoveredScope
+	var buf []byte
+	for s := 0; s < int(h.Stripes); s++ {
+		ended := map[uint64]struct{}{}
+		var rs journal.ReadStats
+		buf, rs, err = r.Stripe(s, buf, func(e journal.Entry) {
+			if e.Kind == journal.KindEnd {
+				ended[e.Scope] = struct{}{}
 			}
-			sc.start, sc.started = s, true
-		case journal.KindRecord:
-			jr, err := decodeJournalRecord(e.Payload)
-			if err != nil {
-				st.journalCorrupt.Add(1)
-				continue
-			}
-			sc.records = append(sc.records, jr)
-		case journal.KindEnd:
-			sc.ended = true
-		}
-	}
-
-	open := make([]*recoveredScope, 0, len(scopes))
-	for _, sc := range scopes {
-		if sc.ended {
+		})
+		if err != nil {
+			st.journalCorrupt.Add(1)
 			continue
 		}
-		// Records of one scope logged from several goroutines can reach the
-		// journal out of order; their own times order them.
-		slices.SortStableFunc(sc.records, func(a, b journalRecord) int { return a.time.Compare(b.time) })
-		open = append(open, sc)
+		st.journalCorrupt.Add(uint64(rs.Invalid))
+
+		scopes := map[uint64]*recoveredScope{}
+		journal.WalkStripe(h, buf, s, func(e journal.Entry) {
+			if _, done := ended[e.Scope]; done {
+				return
+			}
+			sc := scopes[e.Scope]
+			if sc == nil {
+				sc = &recoveredScope{id: e.Scope}
+				scopes[e.Scope] = sc
+				open = append(open, sc)
+			}
+			switch e.Kind {
+			case journal.KindStart:
+				s, err := decodeScopeStart(e.Payload)
+				if err != nil {
+					st.journalCorrupt.Add(1)
+					return
+				}
+				sc.start, sc.started = s, true
+			case journal.KindRecord:
+				jr, err := decodeJournalRecord(e.Payload)
+				if err != nil {
+					st.journalCorrupt.Add(1)
+					return
+				}
+				sc.records = append(sc.records, jr)
+			}
+		})
 	}
+
+	// Within a scope, records stay in the order they were journaled, which is
+	// the order a flush writes them.
 	slices.SortFunc(open, func(a, b *recoveredScope) int {
-		return cmp.Or(a.first().Compare(b.first()), cmp.Compare(a.start.traceID, b.start.traceID))
+		return cmp.Or(a.first().Compare(b.first()), cmp.Compare(a.id, b.id))
 	})
 	for _, sc := range open {
 		st.recoverScope(sc, h.Host, time.Unix(0, h.StartedAt))
@@ -129,7 +192,12 @@ func (st *recorderState) recoverScope(sc *recoveredScope, host string, processSt
 		slog.String("flightrec.recovered_host", host),
 		slog.Time("flightrec.recovered_process_start", processStart),
 	}
+	if traceID == "" {
+		// Nothing else tells apart the records of scopes without a trace.
+		recovered = append(recovered, slog.Uint64("flightrec.recovered_scope", sc.id))
+	}
 
+	written := 0
 	for i, jr := range sc.records {
 		rec := slog.NewRecord(jr.time, jr.level, jr.message, 0)
 		rec.AddAttrs(jr.attrs...)
@@ -144,14 +212,18 @@ func (st *recorderState) recoverScope(sc *recoveredScope, host string, processSt
 			out.AddAttrs(slog.Bool("flightrec.truncated", true))
 		}
 		out.AddAttrs(recovered...)
-		_ = st.baseNext.Handle(st.injectTraceContext(context.Background(), tc), out)
+		if st.handleRecovered(st.injectTraceContext(context.Background(), tc), out) {
+			written++
+		}
 	}
-	st.journalRecoveredRecords.Add(uint64(len(sc.records)))
+	st.journalRecoveredRecords.Add(uint64(written))
 	st.journalRecoveredScopes.Add(1)
 
 	summary := slog.NewRecord(st.now(), slog.LevelError, "request interrupted by crash", 0)
+	if traceID != "" {
+		summary.AddAttrs(slog.String("flightrec.trace_id", traceID))
+	}
 	summary.AddAttrs(
-		slog.String("flightrec.trace_id", traceID),
 		slog.String("flightrec.flush_reason", flushReasonCrashRecovery),
 		slog.Int("flightrec.recovered_records", len(sc.records)),
 	)
@@ -171,5 +243,22 @@ func (st *recorderState) recoverScope(sc *recoveredScope, host string, processSt
 	if hasScopeTrace {
 		ctx = st.injectTraceContext(ctx, TraceContext{TraceID: scopeTrace})
 	}
-	_ = st.baseNext.Handle(ctx, summary)
+	st.handleRecovered(ctx, summary)
+}
+
+// handleRecovered writes a recovered record to Next and reports whether it
+// was written. A panic in Next is recovered: one bad record must not cost the
+// rest of the journal, which is deleted after recovery.
+func (st *recorderState) handleRecovered(ctx context.Context, rec slog.Record) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			st.journalRecoveryErrors.Add(1)
+			ok = false
+		}
+	}()
+	if err := st.baseNext.Handle(ctx, rec); err != nil {
+		st.journalRecoveryErrors.Add(1)
+		return false
+	}
+	return true
 }

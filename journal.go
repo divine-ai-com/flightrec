@@ -76,21 +76,26 @@ var journalScratch = sync.Pool{New: func() any { b := make([]byte, 0, 512); retu
 // attributes, tagged flightrec.flush_reason=crash_recovery and
 // flightrec.recovered=true, then one "request interrupted by crash" summary.
 // Recovery writes each record at least once: a crash during a flush or during
-// recovery can write some records again on the next start. Problems found
-// while recovering are counted in Stats, never returned.
+// recovery can write some records again on the next start. Recovered records
+// have no source location. Problems found while recovering are counted in
+// Stats, never returned. Recovery blocks StartJournal; it reads the old file
+// one stripe (an eighth) at a time and decodes only the interrupted requests,
+// so it takes well under a second for the default size.
 //
-// The file is created with mode 0600. A lock file, path.lock, is held while
-// the journal runs; a second process or Recorder using the same path gets an
-// error. The lock file is left in place. It is written with zeros in
-// full when created, then written to through a shared memory mapping, which
-// the kernel keeps when the process dies. It does not survive the loss of the
+// The journal file is created with mode 0600 and written with zeros in full,
+// then written to through a shared memory mapping, which the kernel keeps
+// when the process dies. A lock file, path.lock, is held while the journal
+// runs, so a second process or Recorder using the same path gets an error;
+// the lock file is left in place. It does not survive the loss of the
 // machine, and it must be on a volume that outlives the process: in
 // Kubernetes, an emptyDir volume of the pod.
 //
 // StartJournal returns an error only when no journal can run: an
 // unsupported platform (ErrJournalUnsupported), an invalid size, a journal
 // already running on this Recorder (ErrJournalRunning), a path in use by
-// another process or Recorder, or a file that cannot be created. stop stops journaling, zeros the file and removes it.
+// another process or Recorder, something other than a journal at path or
+// path.recovering (it is never deleted), or a file that cannot be created or
+// removed. stop stops journaling, zeros the file and removes it.
 // Scopes still open when stop is called are not recovered: call stop after
 // the server has drained its requests. The Journal* fields of Stats describe
 // the running journal and read zero after stop, except the recovery counters.
@@ -120,7 +125,10 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 	if err != nil {
 		return nil, fmt.Errorf("flightrec: start journal: %w", err)
 	}
-	st.recoverPending(path)
+	if err := st.recoverPending(path); err != nil {
+		unlock()
+		return nil, err
+	}
 
 	// Each stripe needs at least two blocks; small journals get fewer stripes.
 	stripes := min(int64(journalStripes), (cfg.size-journal.HeaderSize)/(2*journal.BlockSize))
@@ -153,29 +161,6 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 		})
 		return err
 	}, nil
-}
-
-// recoverPending recovers the journal files a previous process left at path,
-// and leaves path free for a new journal. The caller holds the lock file.
-//
-// A file at path.recovering is from a recovery that did not finish; it is
-// retried first. A file at path is then moved to path.recovering before it is
-// recovered, so a crash during recovery leaves it there for the next start,
-// which counts the attempt.
-func (st *recorderState) recoverPending(path string) {
-	recovering := path + ".recovering"
-	if _, err := os.Lstat(recovering); err == nil {
-		st.recoverJournal(recovering)
-	}
-	if _, err := os.Lstat(path); err != nil {
-		return
-	}
-	if err := os.Rename(path, recovering); err != nil {
-		st.journalDiscarded.Add(1)
-		_ = journal.Discard(path)
-		return
-	}
-	st.recoverJournal(recovering)
 }
 
 // journalStart writes a start entry for a new scope if a journal is running.
@@ -232,6 +217,7 @@ func (st *recorderState) journalStats(s *Stats) {
 	s.JournalCorruptEntries = st.journalCorrupt.Load()
 	s.JournalDiscardedFiles = st.journalDiscarded.Load()
 	s.JournalAbandonedRecoveries = st.journalAbandoned.Load()
+	s.JournalRecoveryErrors = st.journalRecoveryErrors.Load()
 	js := st.journal.Load()
 	if js == nil {
 		return

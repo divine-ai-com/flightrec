@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"syscall"
 )
 
@@ -71,7 +72,9 @@ func (j *File) Close(zero bool) error {
 		j.stripes[i].mu.Lock() // wait for appends in progress
 	}
 	if zero {
+		// Synced so the zeros reach the disk, not only the page cache.
 		j.protect(func() { clear(j.data) })
+		_ = j.f.Sync()
 	}
 	for i := range j.stripes {
 		j.stripes[i].mu.Unlock()
@@ -84,7 +87,7 @@ func (j *File) Close(zero bool) error {
 }
 
 // ErrNotPrivate means a journal file is not a regular file owned by the
-// current user.
+// current user, or has more than one link.
 var ErrNotPrivate = errors.New("journal: not a regular file owned by the current user")
 
 // ReadFile reads a journal file without mapping it, after checking that it
@@ -109,10 +112,49 @@ func ReadFile(path string, maxSize int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, maxSize))
 }
 
-// openPrivate opens path read-write without following a symlink and checks
-// that it is a regular file owned by the current user.
-func openPrivate(path string) (*os.File, int64, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0) //nolint:gosec // G304: the path is derived from the journal path the application configured
+// Class says what is at a path where a journal file is expected.
+type Class int
+
+// File classes.
+const (
+	ClassMissing Class = iota // nothing there
+	ClassSymlink              // a symbolic link; never followed
+	ClassJournal              // a private regular file starting with the journal magic
+	ClassDead                 // a private regular file starting with zeros: a journal whose creation or zeroing was cut short
+	ClassOther                // anything else, left alone
+)
+
+// Classify says what is at path, without following a symlink or blocking on
+// a FIFO.
+func Classify(path string) Class {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return ClassMissing
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return ClassSymlink
+	}
+	f, _, err := openPrivate(path, os.O_RDONLY)
+	if err != nil {
+		return ClassOther
+	}
+	defer func() { _ = f.Close() }()
+	b := make([]byte, len(magic))
+	n, _ := io.ReadFull(f, b)
+	switch {
+	case n == len(magic) && string(b) == magic:
+		return ClassJournal
+	case !slices.ContainsFunc(b[:n], func(c byte) bool { return c != 0 }):
+		return ClassDead
+	}
+	return ClassOther
+}
+
+// openPrivate opens path without following a symlink or blocking on a FIFO,
+// and checks that it is a regular file owned by the current user with a
+// single link, so a hard link to another file is never written.
+func openPrivate(path string, flag int) (*os.File, int64, error) {
+	f, err := os.OpenFile(path, flag|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0) //nolint:gosec // G304: the path is derived from the journal path the application configured
 	if err != nil {
 		return nil, 0, err
 	}
@@ -122,44 +164,101 @@ func openPrivate(path string) (*os.File, int64, error) {
 		return nil, 0, err
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !fi.Mode().IsRegular() || !ok || int(st.Uid) != os.Getuid() {
+	if !fi.Mode().IsRegular() || !ok || int(st.Uid) != os.Getuid() || st.Nlink != 1 {
 		_ = f.Close()
 		return nil, 0, ErrNotPrivate
 	}
 	return f, fi.Size(), nil
 }
 
-// IncrementAttempts adds one to the recovery attempt counter in the header
-// of the journal file at path and returns the new count. The write reaches
-// the page cache, which survives the death of the process.
-func IncrementAttempts(path string) (uint32, error) {
-	f, _, err := openPrivate(path)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = f.Close() }()
-	b := make([]byte, HeaderSize)
-	if _, err := io.ReadFull(f, b); err != nil {
-		return 0, ErrBadHeader
-	}
-	h, err := DecodeHeader(b)
-	if err != nil {
-		return 0, err
-	}
-	if h.Attempts < ^uint32(0) {
-		h.Attempts++
-	}
-	encodeHeader(b, h)
-	if _, err := f.WriteAt(b, 0); err != nil {
-		return 0, err
-	}
-	return h.Attempts, nil
+// Recovering is a journal file opened for recovery. It is read with
+// read(2), one stripe at a time, never mapped.
+type Recovering struct {
+	f      *os.File
+	Header Header
 }
 
-// Discard overwrites the file at path with zeros, when it is a private
-// regular file, and removes it. The journal holds unredacted debug data.
+// OpenRecovering opens the journal file at path for recovery, checking that
+// it is private and its header valid, and that it is not larger than
+// maxSize.
+func OpenRecovering(path string, maxSize int64) (*Recovering, error) {
+	f, size, err := openPrivate(path, os.O_RDWR)
+	if err != nil {
+		return nil, err
+	}
+	b := make([]byte, HeaderSize)
+	h, err := func() (Header, error) {
+		if size > maxSize {
+			return Header{}, fmt.Errorf("journal: %s is %d bytes, more than %d", path, size, maxSize)
+		}
+		if _, err := io.ReadFull(f, b); err != nil {
+			return Header{}, ErrBadHeader
+		}
+		h, err := DecodeHeader(b)
+		if err == nil && h.Size > size {
+			err = ErrBadHeader
+		}
+		return h, err
+	}()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return &Recovering{f: f, Header: h}, nil
+}
+
+// IncrementAttempts adds one to the recovery attempt counter in the file's
+// header and returns the new count. The write reaches the page cache, which
+// survives the death of the process.
+func (r *Recovering) IncrementAttempts() (uint32, error) {
+	if r.Header.Attempts < ^uint32(0) {
+		r.Header.Attempts++
+	}
+	b := make([]byte, HeaderSize)
+	encodeHeader(b, r.Header)
+	if _, err := r.f.WriteAt(b, 0); err != nil {
+		return 0, err
+	}
+	return r.Header.Attempts, nil
+}
+
+// Stripe reads stripe s into buf, growing it as needed, and calls fn for its
+// valid entries in write order. Entry payloads point into the returned
+// buffer and are valid until the next call.
+func (r *Recovering) Stripe(s int, buf []byte, fn func(Entry)) ([]byte, ReadStats, error) {
+	off, n := StripeRange(r.Header, s)
+	if int64(cap(buf)) < n {
+		buf = make([]byte, n)
+	}
+	buf = buf[:n]
+	if _, err := r.f.ReadAt(buf, off); err != nil {
+		return buf, ReadStats{}, err
+	}
+	return buf, WalkStripe(r.Header, buf, s, fn), nil
+}
+
+// Close closes the file.
+func (r *Recovering) Close() error { return r.f.Close() }
+
+// ErrNotJournal means a file is not a journal, so it is left in place.
+var ErrNotJournal = errors.New("journal: not a journal file")
+
+// Discard removes the journal file at path, first overwriting it with zeros
+// and syncing them, since it holds unredacted debug data. A symlink is
+// removed without being followed. Anything else that is not a journal
+// (ClassJournal or ClassDead) is left alone and reported with
+// ErrNotJournal.
 func Discard(path string) error {
-	if f, size, err := openPrivate(path); err == nil {
+	switch Classify(path) {
+	case ClassMissing:
+		return nil
+	case ClassSymlink:
+		return os.Remove(path)
+	case ClassJournal, ClassDead:
+	default:
+		return fmt.Errorf("%w: %s", ErrNotJournal, path)
+	}
+	if f, size, err := openPrivate(path, os.O_RDWR); err == nil {
 		zeros := make([]byte, min(size, 1<<20))
 		for off := int64(0); off < size; off += int64(len(zeros)) {
 			n := min(int64(len(zeros)), size-off)
@@ -167,6 +266,7 @@ func Discard(path string) error {
 				break
 			}
 		}
+		_ = f.Sync()
 		_ = f.Close()
 	}
 	return os.Remove(path)
