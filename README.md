@@ -198,7 +198,7 @@ flightrec follows semantic versioning. Before 1.0, a minor release may change th
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, follow the [security policy](SECURITY.md).
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md). To report a vulnerability, follow the [security policy](.github/SECURITY.md).
 
 ## License
 

@@ -3,7 +3,7 @@
 Measured on `main` at 010c339 (the code released as v0.3.0) by the [Benchmarks workflow](https://github.com/divine-ai-com/flightrec/actions/runs/43714183457) on a GitHub Actions runner (AMD EPYC 9V74, 4 vCPU, linux/amd64, Go 1.27.4): 10 alternating runs, benchstat medians. Absolute numbers depend on the machine; the ratios are what carry over. Reproduce locally with:
 
 ```bash
-go test -bench=. -benchmem -run='^$' . && go run ./cmd/demo   # from the repository root
+go test -bench=. -benchmem -run='^$' . && go run ./examples/demo   # from the repository root
 ```
 
 Cost of one request that makes 20 log calls with 3 attributes each:

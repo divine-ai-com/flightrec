@@ -1,6 +1,6 @@
 # Running flightrec safely
 
-flightrec sits on the request path and holds your services' debug logs, so treat its inputs as untrusted and its buffers as sensitive. This page lists what to set, and why. To report a vulnerability, follow the [security policy](../SECURITY.md).
+flightrec sits on the request path and holds your services' debug logs, so treat its inputs as untrusted and its buffers as sensitive. This page lists what to set, and why. To report a vulnerability, follow the [security policy](../.github/SECURITY.md).
 
 ## Services that answer clients outside your system
 

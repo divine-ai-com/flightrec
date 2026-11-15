@@ -158,7 +158,7 @@ All additions; nothing existing changes behavior unless the new options are used
 
 ## Delivery plan
 
-Core changes land first so the submodules can require a tagged core version (see RELEASING.md). Each step is one PR closing one issue.
+Core changes land first so the submodules can require a tagged core version (see [RELEASING.md](../RELEASING.md)). Each step is one PR closing one issue.
 
 1. `feat(http): set a flush marker on responses of triggered scopes` (#39, PR #47)
 2. `feat(http): add NewTransport that triggers the caller scope on a flush marker` (#40), with the three-service integration test

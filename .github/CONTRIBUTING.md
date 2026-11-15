@@ -25,7 +25,7 @@ Issues labeled [`good first issue`](https://github.com/divine-ai-com/flightrec/l
 | `internal/journal/` | The crash journal file format, writer and reader |
 | `grpcflightrec/`, `otelflightrec/` | gRPC interceptors; OpenTelemetry span processor and log bridge (separate modules) |
 | `notifier/` | Notifiers: `memnotifier` (core module), `redisnotifier` and `natsnotifier` (separate modules) |
-| `examples/`, `cmd/demo/` | Runnable examples and the volume demo, all run in CI |
+| `examples/` | Runnable examples, including the volume demo, all run in CI |
 | `benchmarks/otelexport/` | otelflightrec benchmarks against a real OTLP exporter (unpublished module) |
 | `docs/` | Reference, guides, benchmarks, design and proposals; `docs/media/src` generates the README visuals |
 
@@ -55,4 +55,4 @@ For benchmark comparisons, run each side with `-count=10` and compare with [benc
 
 ## Releases
 
-Maintainers follow [RELEASING.md](RELEASING.md).
+Maintainers follow [RELEASING.md](../docs/RELEASING.md).
