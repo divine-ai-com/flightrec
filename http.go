@@ -5,6 +5,7 @@ package flightrec
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -283,25 +284,30 @@ func (w *rwReaderFrom) ReadFrom(r io.Reader) (int64, error) { return w.readFrom(
 
 type rwFlusherHijacker struct{ statusResponseWriter }
 
-func (w *rwFlusherHijacker) Flush()                                       { w.flush() }
+func (w *rwFlusherHijacker) Flush() { w.flush() }
+
 func (w *rwFlusherHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) { return w.hijack() }
 
 type rwFlusherReaderFrom struct{ statusResponseWriter }
 
-func (w *rwFlusherReaderFrom) Flush()                              { w.flush() }
+func (w *rwFlusherReaderFrom) Flush() { w.flush() }
+
 func (w *rwFlusherReaderFrom) ReadFrom(r io.Reader) (int64, error) { return w.readFrom(r) }
 
 type rwHijackerReaderFrom struct{ statusResponseWriter }
 
 func (w *rwHijackerReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, error) { return w.hijack() }
-func (w *rwHijackerReaderFrom) ReadFrom(r io.Reader) (int64, error)          { return w.readFrom(r) }
+
+func (w *rwHijackerReaderFrom) ReadFrom(r io.Reader) (int64, error) { return w.readFrom(r) }
 
 type rwFlusherHijackerReaderFrom struct{ statusResponseWriter }
 
 func (w *rwFlusherHijackerReaderFrom) Flush() { w.flush() }
+
 func (w *rwFlusherHijackerReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return w.hijack()
 }
+
 func (w *rwFlusherHijackerReaderFrom) ReadFrom(r io.Reader) (int64, error) { return w.readFrom(r) }
 
 func wrapResponseWriter(w http.ResponseWriter, sc *Scope) (http.ResponseWriter, *statusResponseWriter) {
@@ -340,4 +346,119 @@ func wrapResponseWriter(w http.ResponseWriter, sc *Scope) (http.ResponseWriter, 
 		v := &base
 		return v, v
 	}
+}
+
+// TransportOption configures NewTransport. None are defined yet.
+type TransportOption interface {
+	applyTransport(*transportConfig)
+}
+
+type transportConfig struct{}
+
+// NewTransport returns an http.RoundTripper that sends requests through next
+// (http.DefaultTransport when nil) and reads FlushHeader from each response.
+//
+// When the response carries exactly one FlushHeader value that is a built-in
+// flush reason (see ValidMarker), and the request context holds an open
+// Scope, the scope is triggered with reason "downstream:<value>". If your own
+// response headers have not been written yet, your response carries the
+// marker further up the call chain.
+//
+// Any other FlushHeader value, or more than one, is ignored and counted in
+// Stats.MarkersRejected of the scope's Recorder, because it comes from
+// another service. FlushHeader is removed from every response before it is
+// returned, so code that proxies responses cannot forward it.
+//
+// Only wrap clients that call services you operate. A downstream service can
+// make your service keep its logs for a request; it cannot do anything else.
+func NewTransport(next http.RoundTripper, opts ...TransportOption) http.RoundTripper {
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	var cfg transportConfig
+	for _, o := range opts {
+		o.applyTransport(&cfg)
+	}
+	return &transport{next: next}
+}
+
+type transport struct {
+	next http.RoundTripper
+}
+
+// RoundTrip implements http.RoundTripper.
+func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.next.RoundTrip(req)
+	if resp == nil {
+		return resp, err
+	}
+	values := resp.Header.Values(FlushHeader)
+	if len(values) == 0 {
+		return resp, err
+	}
+	resp.Header.Del(FlushHeader)
+
+	ReceiveMarker(req.Context(), values)
+	return resp, err
+}
+
+// CloseIdleConnections forwards to next when it supports it, so
+// http.Client.CloseIdleConnections keeps working through the wrapper.
+func (t *transport) CloseIdleConnections() {
+	type closeIdler interface{ CloseIdleConnections() }
+	if c, ok := t.next.(closeIdler); ok {
+		c.CloseIdleConnections()
+	}
+}
+
+// SendFlushMarker sends this scope's flush marker if the scope is triggered
+// and Options.DisableFlushMarker is not set: it calls send with the marker
+// value (a built-in reason, see MarkerValue) and reports whether a marker was
+// sent. A nil error from send counts in Stats.FlushMarkersSent; an error
+// counts in Stats.FlushMarkersMissed. An untriggered scope calls nothing.
+//
+// HTTPMiddleware uses it to set FlushHeader. Integrations for other
+// protocols, such as grpcflightrec, call it where they set response metadata.
+func (s *Scope) SendFlushMarker(send func(value string) error) bool {
+	if s == nil || s.state == nil || s.state.opts.DisableFlushMarker {
+		return false
+	}
+	triggered, reason := s.TriggerState()
+	if !triggered {
+		return false
+	}
+	value, _ := MarkerValue(reason)
+	if err := send(value); err != nil {
+		s.state.flushMarkersMissed.Add(1)
+		return false
+	}
+	s.state.flushMarkersSent.Add(1)
+	return true
+}
+
+// ReceiveMarker applies the flush marker values read from a response to the
+// scope in ctx: exactly one built-in value (see ValidMarker) triggers the
+// scope with reason "downstream:<value>" and counts in
+// Stats.DownstreamTriggers if the scope was open and not yet triggered;
+// anything else is counted in Stats.MarkersRejected and ignored. It reports
+// whether the scope was triggered. Without a scope in ctx, or with no values,
+// it does nothing. Integrations for other protocols call it as NewTransport
+// does for FlushHeader.
+func ReceiveMarker(ctx context.Context, values []string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	sc := scopeFromContext(ctx)
+	if sc == nil || sc.state == nil {
+		return false
+	}
+	if len(values) != 1 || !ValidMarker(values[0]) {
+		sc.state.markersRejected.Add(1)
+		return false
+	}
+	if sc.trigger("downstream:" + values[0]) {
+		sc.state.downstreamTriggers.Add(1)
+		return true
+	}
+	return false
 }

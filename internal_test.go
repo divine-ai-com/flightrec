@@ -4,16 +4,191 @@
 package flightrec
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"flag"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/divine-ai-com/flightrec/internal/notify"
 	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
+
+var update = flag.Bool("update", false, "rewrite testdata/golden files")
+
+// normalize replaces the values that change between runs: times, durations
+// and the host name.
+func normalize(b []byte) []byte {
+	for _, r := range []struct {
+		re   *regexp.Regexp
+		repl string
+	}{
+		{regexp.MustCompile(`"(time|start|flightrec.recovered_process_start)":"[^"]*"`), `"$1":"<time>"`},
+		{regexp.MustCompile(`"duration":\d+`), `"duration":<duration>`},
+		{regexp.MustCompile(`"flightrec.recovered_host":"[^"]*"`), `"flightrec.recovered_host":"<host>"`},
+	} {
+		b = r.re.ReplaceAll(b, []byte(r.repl))
+	}
+	return b
+}
+
+// checkGolden compares out with testdata/golden/name.jsonl.
+func checkGolden(t *testing.T, name string, out []byte) {
+	t.Helper()
+	path := filepath.Join("testdata", "golden", name+".jsonl")
+	got := normalize(out)
+	if *update {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run go test -run TestGolden -update)", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s output changed:\n got:\n%s\nwant:\n%s", name, got, want)
+	}
+}
+
+type goldenOrder struct {
+	ID    int    `json:"id"`
+	State string `json:"state"`
+}
+
+// TestGolden pins the exact lines flightrec writes in each situation.
+func TestGolden(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		run  func(rec *Recorder, log *slog.Logger)
+	}{
+		{"healthy", Options{}, func(rec *Recorder, log *slog.Logger) {
+			ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: "req-1", Method: "GET", Path: "/orders"})
+			log.DebugContext(ctx, "loaded cart", "items", 3)
+			sc.End(ctx, 200)
+		}},
+		{"error_log", Options{}, func(rec *Recorder, log *slog.Logger) {
+			ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: "req-2", Method: "POST", Path: "/checkout"})
+			log.DebugContext(ctx, "loaded cart", "items", 3)
+			log.InfoContext(ctx, "calling provider", "provider", "acme")
+			log.ErrorContext(ctx, "provider timed out", "err", errors.New("deadline exceeded"))
+			sc.End(ctx, 200)
+		}},
+		{"status_5xx", Options{}, func(rec *Recorder, log *slog.Logger) {
+			ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: "req-3"})
+			log.With("service", "checkout").WithGroup("req").DebugContext(ctx, "step", "n", 1, "order", goldenOrder{ID: 7, State: "new"})
+			sc.End(ctx, 503)
+		}},
+		{"explicit_flush", Options{}, func(rec *Recorder, log *slog.Logger) {
+			ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: "req-4"})
+			log.DebugContext(ctx, "totals differ")
+			Flush(ctx, "payment mismatch")
+			sc.End(ctx, 200)
+		}},
+		// One record larger than MaxPerScope is dropped by itself; unlike
+		// filling the ring, this does not depend on the platform's slot size.
+		{"truncated", Options{MaxPerScope: 8 << 10}, func(rec *Recorder, log *slog.Logger) {
+			ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: "req-5"})
+			log.DebugContext(ctx, "small-1")
+			log.DebugContext(ctx, "huge", "blob", strings.Repeat("x", 16<<10))
+			log.DebugContext(ctx, "small-2")
+			sc.End(ctx, 500)
+		}},
+		{"retained_flush", Options{Retain: time.Minute}, func(rec *Recorder, log *slog.Logger) {
+			ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: "req-6"})
+			log.DebugContext(ctx, "queued email", "order", &goldenOrder{ID: 9, State: "paid"})
+			sc.End(ctx, 200)
+			rec.FlushTrace(context.Background(), "req-6", "downstream failure")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			tc.opts.Next = slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})
+			tc.opts.PassLeveler = slog.LevelWarn
+			tc.opts.BufferLeveler = slog.LevelDebug
+			rec := New(tc.opts)
+			tc.run(rec, slog.New(rec))
+			checkGolden(t, tc.name, out.Bytes())
+		})
+	}
+}
+
+func TestWithSigningKeyRejectsShortKeys(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("short key accepted")
+		}
+	}()
+	WithSigningKey([]byte("short"))
+}
+
+// FuzzNotifierReceive feeds arbitrary bus messages to the receive path, with
+// and without a signing key: it must never panic, and only well-formed
+// messages may reach the inbox.
+func FuzzNotifierReceive(f *testing.F) {
+	key := bytes.Repeat([]byte("k"), 32)
+	good, _ := json.Marshal(notify.Message{Version: notify.Version, Origin: "other", Notices: []notify.Notice{{TraceID: "t-1", Reason: "http_500"}}})
+	f.Add(good)
+	f.Add(notify.Sign(key, good, time.Now()))
+	f.Add([]byte(`{"v":1,"o":"x","n":[{"t":"a b","r":"zzz"}]}`))
+	f.Fuzz(func(t *testing.T, msg []byte) {
+		for _, keys := range [][][]byte{nil, {key}} {
+			rec := New(Options{Next: slog.DiscardHandler})
+			h := &notifierHub{
+				st:       rec.state,
+				origin:   "self",
+				keys:     keys,
+				inbox:    make(chan notify.Notice, notifierQueueSize),
+				received: notify.NewRecentSet(notifierRecentSize, notifierRecentTTL, rec.state.now),
+			}
+			h.receive(msg)
+			for len(h.inbox) > 0 {
+				n := <-h.inbox
+				if !traceid.Valid(n.TraceID) || !ValidMarker(n.Reason) {
+					t.Fatalf("invalid notice reached the inbox: %+v", n)
+				}
+			}
+		}
+	})
+}
+
+func TestRetainedScopesExpireWithoutTraffic(t *testing.T) {
+	rec := New(Options{Next: slog.NewJSONHandler(io.Discard, nil), Retain: 30 * time.Millisecond})
+	log := slog.New(rec)
+	ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: "t"})
+	log.DebugContext(ctx, "x")
+	sc.End(ctx, 200)
+
+	set := &rec.state.retained
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		set.mu.Lock()
+		n, timerSet := set.order.Len(), set.timer != nil
+		set.mu.Unlock()
+		if n == 0 && !timerSet {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retained scope still held after its window with no other calls: n=%d timer=%v", n, timerSet)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 func TestExtractHTTPTraceIDLimits(t *testing.T) {
 	long := strings.Repeat("a", traceid.MaxLen)
