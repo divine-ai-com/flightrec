@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
-	github.com/divine-ai-com/flightrec v0.3.0-rc.1
+	github.com/divine-ai-com/flightrec v0.3.0
 	github.com/redis/go-redis/v9 v9.23.0
 )
 
