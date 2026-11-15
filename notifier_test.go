@@ -445,3 +445,32 @@ func TestChildScopeInheritsAlias(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	<-done
 }
+
+// TestSignedNotifier checks that processes sharing a signing key exchange
+// notices, and that a process with another key, or none, cannot trigger them.
+func TestSignedNotifier(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	start := func(bus *memnotifier.Bus, opts ...flightrec.NotifierOption) *node {
+		nd := &node{out: &syncBuffer{}}
+		nd.rec = flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(nd.out, nil), BufferLeveler: slog.LevelDebug, Retain: time.Minute})
+		nd.log = slog.New(nd.rec)
+		t.Cleanup(nd.rec.StartNotifier(context.Background(), bus, opts...))
+		return nd
+	}
+	bus := memnotifier.New()
+	b := start(bus, flightrec.WithSigningKey(key))
+	forger := start(bus, flightrec.WithSigningKey([]byte("ffffffffffffffffffffffffffffffff")))
+	plain := start(bus)
+	c := start(bus, flightrec.WithSigningKey(key))
+	listening(t, bus, 4)
+
+	healthyRequest(b.rec, b.log, "t-sig", "b: retained")
+	failRequest(forger, "t-sig")
+	failRequest(plain, "t-sig")
+	eventually(t, "b to reject both", func() bool { return b.rec.Stats().NotifierRejected >= 2 })
+	if got := b.rec.Stats().RemoteFlushes; got != 0 {
+		t.Fatalf("unsigned or wrongly signed notice flushed b (%d)", got)
+	}
+	failRequest(c, "t-sig")
+	eventually(t, "b to flush on the signed notice", func() bool { return b.rec.Stats().RemoteFlushes == 1 })
+}

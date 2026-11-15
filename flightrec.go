@@ -196,8 +196,9 @@ type Stats struct {
 	// the delivery queue was full or the remote flush rate limit was reached.
 	NotifierDeliveryDropped uint64
 	// NotifierRejected counts received messages or notices that were
-	// malformed: invalid encoding or version, too large, an invalid trace ID
-	// or a reason that is not built in.
+	// malformed (invalid encoding or version, too large, an invalid trace ID
+	// or a reason that is not built in) or, with WithSigningKey, unsigned,
+	// wrongly signed or older than two minutes.
 	NotifierRejected uint64
 	// NotifierSubscribeErrors counts Notifier.Subscribe calls that failed
 	// and were retried.
