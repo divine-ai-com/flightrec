@@ -49,3 +49,30 @@ jobs:
 
       - name: Run Benchmarks
         run: go test -bench=. -benchmem -run=^$ ./...
+
+  modules:
+    # Builds each submodule the way a consumer does: without the local replace
+    # directive, against the core version its go.mod requires. A failure means
+    # the submodule needs a core release that has not been tagged yet.
+    name: Submodules build without replace
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [grpcflightrec, otelflightrec]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+
+      - name: Build and vet without replace
+        working-directory: ${{ matrix.module }}
+        env:
+          GOFLAGS: -mod=mod
+        run: |
+          go mod edit -dropreplace=github.com/divine-ai-com/flightrec
+          go build ./...
+          go vet ./...
