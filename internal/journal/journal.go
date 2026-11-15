@@ -185,21 +185,37 @@ func entryCRC(seed uint32, rest []byte) uint32 {
 	return crc32.Update(seed, castagnoli, rest)
 }
 
-// encodeBlockHeader writes a block header for the given logical number.
-func encodeBlockHeader(b []byte, logical, salt uint64) {
+// Block header layout: logical number (8), salt (8), magic (4), start time
+// in Unix nanoseconds (8), CRC of the preceding 28 bytes (4).
+const (
+	offBlockLogical = 0
+	offBlockSalt    = 8
+	offBlockMagic   = 16
+	offBlockTime    = 20
+	offBlockCRC     = 28
+)
+
+// encodeBlockHeader writes a block header for the given logical number and
+// start time. The CRC is stored last.
+func encodeBlockHeader(b []byte, logical, salt uint64, started int64) {
 	clear(b[:blockHeaderSize])
-	binary.LittleEndian.PutUint64(b[0:], logical)
-	binary.LittleEndian.PutUint64(b[8:], salt)
-	binary.LittleEndian.PutUint32(b[16:], blockMagic)
-	binary.LittleEndian.PutUint32(b[20:], crc32.Checksum(b[:20], castagnoli))
+	binary.LittleEndian.PutUint64(b[offBlockLogical:], logical)
+	binary.LittleEndian.PutUint64(b[offBlockSalt:], salt)
+	binary.LittleEndian.PutUint32(b[offBlockMagic:], blockMagic)
+	binary.LittleEndian.PutUint64(b[offBlockTime:], uint64(started))
+	binary.LittleEndian.PutUint32(b[offBlockCRC:], crc32.Checksum(b[:offBlockCRC], castagnoli))
 }
 
-// decodeBlockHeader returns the logical number of a valid block header.
-func decodeBlockHeader(b []byte, salt uint64) (uint64, bool) {
-	if binary.LittleEndian.Uint32(b[16:]) != blockMagic ||
-		binary.LittleEndian.Uint64(b[8:]) != salt ||
-		crc32.Checksum(b[:20], castagnoli) != binary.LittleEndian.Uint32(b[20:]) {
-		return 0, false
+// decodeBlockHeader returns the logical number and start time of a valid
+// block header.
+func decodeBlockHeader(b []byte, salt uint64) (logical uint64, started int64, ok bool) {
+	if binary.LittleEndian.Uint32(b[offBlockMagic:]) != blockMagic ||
+		binary.LittleEndian.Uint64(b[offBlockSalt:]) != salt ||
+		crc32.Checksum(b[:offBlockCRC], castagnoli) != binary.LittleEndian.Uint32(b[offBlockCRC:]) {
+		return 0, 0, false
 	}
-	return binary.LittleEndian.Uint64(b[0:]), true
+	return binary.LittleEndian.Uint64(b[offBlockLogical:]), int64(binary.LittleEndian.Uint64(b[offBlockTime:])), true
 }
+
+// validKind reports whether k is a kind a writer produces as an entry.
+func validKind(k Kind) bool { return k >= KindStart && k <= KindRetained }

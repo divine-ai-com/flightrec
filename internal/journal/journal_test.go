@@ -244,18 +244,26 @@ func TestRandomCorruptionNeverInventsEntries(t *testing.T) {
 	}
 }
 
+// FuzzRead overlays fuzzer bytes on the block area of a valid, empty
+// journal, so the fuzzer exercises the block and entry parser rather than
+// stopping at the header CRC it cannot forge.
 func FuzzRead(f *testing.F) {
-	_, valid := newTestWriter(f, MinSize(1), 1, 1)
-	f.Add(valid[:HeaderSize+BlockSize])
-	f.Add(bytes.Repeat([]byte{0xff}, HeaderSize+64))
-	f.Fuzz(func(t *testing.T, data []byte) {
+	w, valid := newTestWriter(f, MinSize(1), 1, 1)
+	for i := uint64(0); i < 20; i++ {
+		w.Append(0, KindRecord, i, seqPayload(0, i, 40))
+	}
+	f.Add(valid[HeaderSize : HeaderSize+2048])
+	f.Add(bytes.Repeat([]byte{0xff}, 512))
+	f.Fuzz(func(t *testing.T, overlay []byte) {
+		_, data := newTestWriter(t, MinSize(1), 1, 1)
+		copy(data[HeaderSize:], overlay)
 		_, entries, _, err := Read(data)
 		if err != nil {
-			return
+			t.Fatal(err)
 		}
 		for _, e := range entries {
-			if len(e.Payload) > MaxPayload {
-				t.Fatalf("payload of %d bytes", len(e.Payload))
+			if len(e.Payload) > MaxPayload || !validKind(e.Kind) {
+				t.Fatalf("bad entry: kind %d, %d byte payload", e.Kind, len(e.Payload))
 			}
 		}
 	})
@@ -268,7 +276,7 @@ func FuzzReadMutatedJournal(f *testing.F) {
 	f.Fuzz(func(t *testing.T, off1 uint32, x1 byte, off2 uint32, x2 byte) {
 		w, data := newTestWriter(t, MinSize(1), 1, 77)
 		written := map[string]bool{}
-		for seq := uint64(0); seq < 1500; seq++ {
+		for seq := uint64(0); seq < 4000; seq++ { // wraps a two-block stripe
 			p := []byte(fmt.Sprintf("entry-%d-%s", seq, bytes.Repeat([]byte{'x'}, int(seq%40))))
 			w.Append(0, KindRecord, seq, p)
 			written[string(p)] = true
@@ -307,4 +315,151 @@ func BenchmarkAppendParallel(b *testing.B) {
 			w.Append(k, KindRecord, k, p)
 		}
 	})
+}
+
+// TestTornAppendAtEveryPrefix applies an append's byte changes in address
+// order, one more byte at a time, as a kill partway through the copy could
+// leave them (stores reach the page cache in order; the CRC is stored last
+// but sits early in the entry, so address order also covers "CRC before
+// payload"). At every prefix the earlier entries must survive and the torn
+// entry must be either absent or complete. It covers an append inside a
+// block and one that starts a new block after a pad.
+func TestTornAppendAtEveryPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prefill int
+		size    int
+	}{
+		{"inside a block", 10, 100},
+		{"across a block boundary", 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, data := newTestWriter(t, MinSize(1), 1, 3)
+			n := tc.prefill
+			size := tc.size
+			if tc.name == "across a block boundary" {
+				// Fill the first block so the next append pads and moves on.
+				for w.stripes[0].off+align8(entryHeaderSize+200) <= BlockSize {
+					w.Append(0, KindRecord, 0, seqPayload(0, uint64(n), 200))
+					n++
+				}
+				size = 200
+			} else {
+				for i := 0; i < n; i++ {
+					w.Append(0, KindRecord, 0, seqPayload(0, uint64(i), size))
+				}
+			}
+			before := append([]byte(nil), data...)
+			w.Append(0, KindRecord, 0, seqPayload(0, uint64(n), size))
+			after := append([]byte(nil), data...)
+
+			var changed []int
+			for i := range after {
+				if after[i] != before[i] {
+					changed = append(changed, i)
+				}
+			}
+			for k := 0; k <= len(changed); k++ {
+				state := append([]byte(nil), before...)
+				for _, i := range changed[:k] {
+					state[i] = after[i]
+				}
+				_, entries, _, err := Read(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != n && len(entries) != n+1 {
+					t.Fatalf("prefix %d/%d: %d entries, want %d or %d", k, len(changed), len(entries), n, n+1)
+				}
+				for i, e := range entries {
+					if _, seq := decodeSeq(e.Payload); seq != uint64(i) || len(e.Payload) != max(size, 16) {
+						t.Fatalf("prefix %d: entry %d has seq %d, %d bytes", k, i, seq, len(e.Payload))
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHostileFieldsAreRejected(t *testing.T) {
+	w, data := newTestWriter(t, MinSize(1), 1, 3)
+	for i := uint64(0); i < 3; i++ {
+		w.Append(0, KindRecord, i, seqPayload(0, i, 40))
+	}
+	first := HeaderSize + blockHeaderSize
+	for _, tc := range []struct {
+		name  string
+		field int
+		value uint32
+	}{
+		{"payload length that wraps to a negative int on 32-bit", 20, 0x80000000},
+		{"length larger than the entry", 0, 96},
+		{"length past the block", 0, BlockSize},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := append([]byte(nil), data...)
+			binary.LittleEndian.PutUint32(state[first+tc.field:], tc.value)
+			_, entries, st, err := Read(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 || st.Invalid != 1 {
+				t.Errorf("read %d entries, stats %+v; a corrupt first entry must end the block", len(entries), st)
+			}
+		})
+	}
+
+	t.Run("misplaced block header", func(t *testing.T) {
+		state := append([]byte(nil), data...)
+		// Put logical block 1's header in physical block 1, where the writer
+		// would put logical block 2.
+		copy(state[HeaderSize+BlockSize:], state[HeaderSize:HeaderSize+blockHeaderSize])
+		_, entries, st, _ := Read(state)
+		if st.Blocks != 1 || len(entries) != 3 {
+			t.Errorf("blocks %d entries %d; the misplaced header must be ignored", st.Blocks, len(entries))
+		}
+	})
+
+	t.Run("hostile header with a valid CRC", func(t *testing.T) {
+		state := append([]byte(nil), data...)
+		h, _ := DecodeHeader(state)
+		h.Stripes = 1 << 30
+		encodeHeader(state, h)
+		if _, err := DecodeHeader(state); err == nil {
+			t.Error("header with more stripes than fit was accepted")
+		}
+		h.Stripes = 1
+		h.Size = 1 << 40
+		encodeHeader(state, h)
+		if _, _, _, err := Read(state); err == nil {
+			t.Error("header claiming more bytes than the data was accepted")
+		}
+	})
+}
+
+func TestZeroSaltIsReplaced(t *testing.T) {
+	w, _ := newTestWriter(t, MinSize(1), 1, 0)
+	if w.Header().Salt == 0 {
+		t.Fatal("zero salt kept")
+	}
+}
+
+func TestOldestBlockTime(t *testing.T) {
+	clock := int64(1000)
+	data := make([]byte, MinSize(1))
+	w, err := newWriter(data, Header{Size: int64(len(data)), Stripes: 1, Salt: 1}, func() int64 { clock++; return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.OldestBlockTime(); got != 1001 {
+		t.Fatalf("oldest %d, want the first block's 1001", got)
+	}
+	for i := 0; i < 3000; i++ { // wraps the two blocks several times
+		w.Append(0, KindRecord, 0, make([]byte, 100))
+	}
+	_, entries, _, _ := Read(data)
+	oldestRead := entries[0].BlockTime
+	if got := w.OldestBlockTime(); got != oldestRead {
+		t.Errorf("OldestBlockTime %d, oldest block read back %d", got, oldestRead)
+	}
 }
