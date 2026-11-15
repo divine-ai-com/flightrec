@@ -7,6 +7,7 @@ package flightrec
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -16,7 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
+	"sync"
 	"testing"
 	"time"
 )
@@ -40,17 +41,23 @@ func TestMain(m *testing.M) {
 }
 
 // runCrashChild journals scopes from several goroutines until it is killed.
-// Workers end most scopes and leave the last one of each open.
+// A kill between a scope's start and its end leaves that scope interrupted,
+// so at most one per worker. It prints "working" once every worker has ended
+// a scope, and exits by itself if it outlives the test.
 func runCrashChild(path string) {
+	time.AfterFunc(60*time.Second, func() { os.Exit(3) })
 	rec := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug})
 	if _, err := rec.StartJournal(path, WithJournalSize(1<<20)); err != nil {
 		fmt.Println("error:", err)
 		os.Exit(1)
 	}
 	log := slog.New(rec).With("child", true).WithGroup("work")
+	var working sync.WaitGroup
+	working.Add(8)
 	for w := range 8 {
 		go func() {
 			seq := 0
+			var once sync.Once
 			for {
 				ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: fmt.Sprintf("w%d-s%d", w, seq), Method: "GET", Path: "/crash"})
 				n := 1 + seq%5
@@ -62,10 +69,12 @@ func runCrashChild(path string) {
 					sc.Trigger("test")
 				}
 				sc.End(ctx, 200)
+				once.Do(working.Done)
 			}
 		}()
 	}
-	fmt.Println("ready")
+	working.Wait()
+	fmt.Println("working")
 	select {}
 }
 
@@ -75,8 +84,10 @@ func TestCrashRecoveryAfterKill(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "j")
 	for round := range 5 {
-		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		cmd := exec.Command(os.Args[0])
 		cmd.Env = append(os.Environ(), crashChildEnv+"="+path)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			t.Fatal(err)
@@ -84,13 +95,24 @@ func TestCrashRecoveryAfterKill(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		line, _ := bufio.NewReader(stdout).ReadString('\n')
-		if strings.TrimSpace(line) != "ready" {
-			_ = cmd.Process.Kill()
-			t.Fatalf("child: %q", line)
+		t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+		ready := make(chan string, 1)
+		go func() {
+			line, _ := bufio.NewReader(stdout).ReadString('\n')
+			ready <- strings.TrimSpace(line)
+		}()
+		select {
+		case line := <-ready:
+			if line != "working" {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				t.Fatalf("child: %q; stderr: %s", line, stderr.String())
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatalf("child not working after 20s; stderr: %s", stderr.String())
 		}
-		time.Sleep(time.Duration(20+rand.IntN(200)) * time.Millisecond)
-		if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		time.Sleep(time.Duration(rand.IntN(200)) * time.Millisecond)
+		if err := cmd.Process.Kill(); err != nil { // SIGKILL
 			t.Fatal(err)
 		}
 		_ = cmd.Wait()
@@ -109,6 +131,7 @@ func TestCrashRecoveryAfterKill(t *testing.T) {
 			t.Fatalf("round %d: stats %+v", round, st)
 		}
 		records, summaries := 0, 0
+		seen := map[[2]int]bool{}
 		for _, l := range out.lines(t) {
 			if l["flightrec.recovered"] != true || l["flightrec.flush_reason"] != "crash_recovery" {
 				t.Fatalf("round %d: untagged line %v", round, l)
@@ -123,6 +146,11 @@ func TestCrashRecoveryAfterKill(t *testing.T) {
 			seq, _ := work["seq"].(float64)
 			if l["msg"] != "step" || l["child"] != true || work["payload"] != crashPayload(int(w), int(seq)) {
 				t.Fatalf("round %d: damaged record %v", round, l)
+			}
+			if k := [2]int{int(w), int(seq)}; seen[k] {
+				t.Fatalf("round %d: record recovered twice: %v", round, l)
+			} else {
+				seen[k] = true
 			}
 			// A scope whose start entry the ring overwrote has no trace ID:
 			// these IDs are not W3C trace IDs, so records do not carry them.
