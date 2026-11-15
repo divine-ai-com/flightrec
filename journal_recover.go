@@ -214,6 +214,9 @@ func (st *recorderState) recoverScope(sc *recoveredScope, host string, processSt
 			// The oldest records were overwritten, or some were too large
 			// to journal.
 			out.AddAttrs(slog.Bool("flightrec.truncated", true))
+			if sc.dropped > 0 {
+				out.AddAttrs(slog.Int("flightrec.dropped_records", sc.dropped))
+			}
 		}
 		out.AddAttrs(recovered...)
 		if st.handleRecovered(st.injectTraceContext(context.Background(), tc), out) {

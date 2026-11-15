@@ -328,7 +328,7 @@ slog.Info("flightrec",
 | `flightrec.flush_reason` | flushed records | Why the request was kept (see below) |
 | `flightrec.truncated`, `flightrec.dropped_records` | first flushed record, if records were lost, or a `buffered records dropped` line if none is left | The buffer hit a memory limit; `dropped_records` counts the records lost, wherever they were |
 | `flightrec.recovered`, `flightrec.recovered_host`, `flightrec.recovered_process_start` | records recovered after a crash | Written by the next start of a killed process (`StartJournal`) |
-| `flightrec.truncated` | first recovered record of a request, if its oldest records were overwritten in the journal | The journal ring wrapped during the request |
+| `flightrec.truncated`, `flightrec.dropped_records` | first recovered record and summary line of a request whose oldest records were overwritten in the journal, or that had records too large to journal (`dropped_records` counts those) | Some of the request's records are missing |
 | `flightrec.recovered_scope` | records recovered for a request with no trace ID | Groups the lines of that request |
 | `duration`, `status` (or `grpc.code`), `method`, `path`, `flightrec.dropped_records` | the summary line | Outcome of a healthy request |
 

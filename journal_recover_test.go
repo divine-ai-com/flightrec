@@ -501,6 +501,9 @@ func TestRecoverMarksRecordsTooLargeToJournal(t *testing.T) {
 	log.DebugContext(ctx, "small", "seq", 0)
 	log.DebugContext(ctx, "huge", "blob", strings.Repeat("x", 70<<10))
 	log.DebugContext(ctx, "small", "seq", 2)
+	if got := r.Stats().JournalDropped; got != 1 {
+		t.Errorf("JournalDropped = %d, want 1", got)
+	}
 	crash(t, r)
 
 	var out lineBuffer
@@ -511,7 +514,7 @@ func TestRecoverMarksRecordsTooLargeToJournal(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("got %d lines, want 2 records and a summary: %v", len(lines), lines)
 	}
-	if lines[0]["flightrec.truncated"] != true {
+	if lines[0]["flightrec.truncated"] != true || lines[0]["flightrec.dropped_records"] != float64(1) {
 		t.Errorf("first recovered record not marked truncated: %v", lines[0])
 	}
 	sum := lines[2]

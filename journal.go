@@ -55,9 +55,10 @@ func WithJournalSize(bytes int64) JournalOption { return journalSizeOption(bytes
 
 // journalState is a running journal.
 type journalState struct {
-	file    *journal.File
-	unlock  func() // releases path.lock
-	records atomic.Uint64
+	file      *journal.File
+	unlock    func() // releases path.lock
+	records   atomic.Uint64
+	oversized atomic.Uint64 // records too large to journal
 }
 
 // maxScratch is the largest encode buffer kept for reuse.
@@ -187,7 +188,8 @@ func (st *recorderState) journalRecord(sc *Scope, r *Recorder, rec slog.Record, 
 	b := appendJournalRecord((*bp)[:0], r, rec, tc)
 	if len(b) > journal.MaxPayload {
 		// Too large for an entry: leave a marker, so recovery can say the
-		// scope lost a record. The writer counts the record as dropped.
+		// scope lost a record, and count the record as dropped.
+		js.oversized.Add(1)
 		js.file.Append(sc.jid, journal.KindDropped, sc.jid, nil)
 	} else if js.file.Append(sc.jid, journal.KindRecord, sc.jid, b) {
 		js.records.Add(1)
@@ -230,7 +232,7 @@ func (st *recorderState) journalStats(s *Stats) {
 	s.JournalRecordsWritten = js.records.Load()
 	s.JournalBytesWritten = ws.Bytes
 	s.JournalWraps = ws.Wraps
-	s.JournalDropped = ws.Dropped
+	s.JournalDropped = ws.Dropped + js.oversized.Load()
 	s.JournalFaults = ws.Faults
 	if oldest := js.file.OldestBlockTime(); oldest > 0 {
 		s.JournalOldestAge = time.Since(time.Unix(0, oldest)) // the writer stamps blocks with the wall clock
