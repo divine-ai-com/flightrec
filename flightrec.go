@@ -175,7 +175,8 @@ type Stats struct {
 	// RetainedExpired counts retained scopes dropped after Options.Retain.
 	RetainedExpired uint64
 	// RetainedEvicted counts retained scopes dropped early, to stay within
-	// MaxRetained or the per-trace limit.
+	// MaxRetained or the per-trace limit, including scopes larger than
+	// MaxRetained on their own, which are dropped instead of retained.
 	RetainedEvicted uint64
 }
 
@@ -324,6 +325,9 @@ func New(opts Options) *Recorder {
 // Stats returns a snapshot of the recorder's current and cumulative metrics.
 func (r *Recorder) Stats() Stats {
 	st := r.state
+	// Gauges first: computing them expires old retained scopes, which the
+	// counters below must include.
+	retainedScopes, retainedBytes, retainedOldest := st.retainedGauges()
 	stats := Stats{
 		ActiveScopes:              st.activeScopes.Load(),
 		BufferedBytes:             st.totalBytes.Load(),
@@ -345,7 +349,7 @@ func (r *Recorder) Stats() Stats {
 		RetainedExpired:           st.retainedExpired.Load(),
 		RetainedEvicted:           st.retainedEvicted.Load(),
 	}
-	stats.RetainedScopes, stats.RetainedBytes, stats.RetainedOldestAge = st.retainedGauges()
+	stats.RetainedScopes, stats.RetainedBytes, stats.RetainedOldestAge = retainedScopes, retainedBytes, retainedOldest
 	return stats
 }
 
@@ -853,10 +857,11 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	}
 
 	droppedCount := uint64(healthyDropped) + droppedInScope
+	retainedCount := len(entries)
 	if retain {
 		// Retained records are not written now. They count as healthy drops
 		// only if the retained scope expires or is evicted.
-		droppedCount = uint64(len(entries)) + droppedInScope
+		droppedCount = droppedInScope
 		st.retain(traceID, entries, truncated, droppedInScope, now)
 	} else {
 		st.scopesHealthyDropped.Add(1)
@@ -882,7 +887,7 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 			summary.AddAttrs(slog.String("path", path))
 		}
 		if retain {
-			summary.AddAttrs(slog.Bool("flightrec.retained", true))
+			summary.AddAttrs(slog.Int("flightrec.retained_records", retainedCount))
 		}
 		summaryCtx := ctx
 		if tc := st.extractTraceContext(ctx); !tc.HasTraceID() && hasScopeTraceBytes {

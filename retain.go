@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -34,6 +35,7 @@ type retainedSet struct {
 	byTrace map[string][]*retainedScope
 	order   list.List // of *retainedScope, oldest first
 	bytes   int64
+	timer   *time.Timer // releases expired scopes when no other call does
 }
 
 // retain moves the entries of a healthy scope into the retained set.
@@ -75,6 +77,29 @@ func (st *recorderState) retain(traceID string, entries []bufferedEntry, truncat
 	for set.bytes > st.opts.MaxRetained && set.order.Len() > 0 {
 		st.dropRetainedLocked(set.order.Front().Value.(*retainedScope), false)
 	}
+	if set.timer == nil {
+		set.timer = time.AfterFunc(st.opts.Retain, st.sweepRetained)
+	}
+}
+
+// sweepRetained runs from a timer so that retained scopes are released after
+// Options.Retain even when no request, FlushTrace or Stats call follows.
+func (st *recorderState) sweepRetained() {
+	set := &st.retained
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	now := st.now()
+	st.expireRetainedLocked(now)
+	front := set.order.Front()
+	if front == nil {
+		set.timer = nil
+		return
+	}
+	next := front.Value.(*retainedScope).retainedAt.Add(st.opts.Retain).Sub(now)
+	if next < 10*time.Millisecond {
+		next = 10 * time.Millisecond
+	}
+	set.timer = time.AfterFunc(next, st.sweepRetained)
 }
 
 // expireRetainedLocked drops retained scopes older than Options.Retain.
@@ -120,17 +145,19 @@ func (st *recorderState) removeRetainedLocked(rs *retainedScope) {
 	}
 }
 
-// retainedGauges returns the current retained scope count, bytes and the age
-// of the oldest retained scope.
+// retainedGauges expires old retained scopes, then returns the retained scope
+// count, bytes and the age of the oldest retained scope.
 func (st *recorderState) retainedGauges() (scopes, bytes int64, oldest time.Duration) {
+	if st.opts.Retain <= 0 {
+		return 0, 0, 0
+	}
 	set := &st.retained
 	set.mu.Lock()
 	defer set.mu.Unlock()
-	if st.opts.Retain > 0 && set.byTrace != nil {
-		st.expireRetainedLocked(st.now())
-	}
+	now := st.now()
+	st.expireRetainedLocked(now)
 	if e := set.order.Front(); e != nil {
-		oldest = st.now().Sub(e.Value.(*retainedScope).retainedAt)
+		oldest = now.Sub(e.Value.(*retainedScope).retainedAt)
 	}
 	return int64(set.order.Len()), set.bytes, oldest
 }
@@ -140,15 +167,26 @@ func (st *recorderState) retainedGauges() (scopes, bytes int64, oldest time.Dura
 // only when Options.Retain is set; scopes that have expired or been evicted
 // are gone. An empty reason is recorded as explicit_flush.
 //
-// Records are written with a background context carrying the trace context
-// captured at log time; the original request context is not kept.
-func (r *Recorder) FlushTrace(traceID, reason string) int {
-	st := r.state
+// FlushTrace does not affect scopes for the trace that are still running;
+// trigger those with Flush on their context, or let a notifier do it (see
+// StartNotifier).
+//
+// Records are written to Next with ctx carrying the trace context captured
+// at log time; the original request context is not kept.
+func (r *Recorder) FlushTrace(ctx context.Context, traceID, reason string) int {
+	if reason == "" {
+		reason = "explicit_flush"
+	}
+	return r.state.flushRetained(ctx, traceID, reason)
+}
+
+// flushRetained implements FlushTrace.
+func (st *recorderState) flushRetained(ctx context.Context, traceID, reason string) int {
 	if st.opts.Retain <= 0 || traceID == "" {
 		return 0
 	}
-	if reason == "" {
-		reason = "explicit_flush"
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	set := &st.retained
@@ -167,7 +205,7 @@ func (r *Recorder) FlushTrace(traceID, reason string) int {
 	for _, rs := range scopes {
 		st.scopesFlushed.Add(1)
 		st.retainedFlushed.Add(1)
-		st.writeFlushed(context.Background(), rs.entries, rs.traceID, reason, rs.truncated, rs.dropped)
+		st.writeFlushed(ctx, rs.entries, rs.traceID, reason, rs.truncated, rs.dropped)
 	}
 	return len(scopes)
 }
@@ -187,18 +225,29 @@ func (st *recorderState) writeFlushed(ctx context.Context, entries []bufferedEnt
 	st.recordsFlushed.Add(uint64(len(entries)))
 }
 
-// snapshotAnyValues replaces slog.KindAny attribute values in entries with a
-// copy taken now. A retained scope can be written long after its request
-// ended, by which time the objects those values point to may have changed or
-// been reused by another request. Values are encoded the way slog's
-// JSONHandler encodes them, as raw JSON, so the output looks the same; errors
-// become their message, and values JSON cannot encode become a string.
+// snapshotAnyValues replaces slog.KindAny attribute values in entries, and in
+// attributes added with Logger.With, with a copy taken now. A retained scope
+// can be written long after its request ended, by which time the objects
+// those values point to may have changed or been reused by another request.
 //
-// It returns the bytes the snapshots add.
+// The copy is a snapshotValue: the value as JSON, written unchanged by
+// slog.JSONHandler and as text by slog.TextHandler. Errors become their
+// message, and values JSON cannot encode become a string describing the
+// error. It returns the bytes the copies add.
 func snapshotAnyValues(entries []bufferedEntry) int64 {
-	var added int64
+	sn := snapshotter{}
+	copied := make(map[*Recorder]*Recorder)
 	for i := range entries {
-		rec := &entries[i].rec
+		e := &entries[i]
+		if r, ok := copied[e.recorder]; ok {
+			e.recorder = r
+		} else {
+			r := e.recorder.snapshotAttrs(&sn)
+			copied[e.recorder] = r
+			e.recorder = r
+		}
+
+		rec := &e.rec
 		changed := false
 		rec.Attrs(func(a slog.Attr) bool {
 			if hasAnyValue(a.Value) {
@@ -212,18 +261,57 @@ func snapshotAnyValues(entries []bufferedEntry) int64 {
 		}
 		out := slog.NewRecord(rec.Time, rec.Level, rec.Message, rec.PC)
 		rec.Attrs(func(a slog.Attr) bool {
-			out.AddAttrs(snapshotAttr(a, &added))
+			out.AddAttrs(sn.attr(a))
 			return true
 		})
 		*rec = out
 	}
-	return added
+	return sn.added
+}
+
+// snapshotter copies values for one retained scope. The same pointer is
+// often logged many times in one request, so pointer values are encoded once.
+type snapshotter struct {
+	added    int64
+	pointers map[any]slog.Value
+}
+
+// snapshotAttrs returns r, or a copy of r whose Logger.With attributes have
+// their slog.KindAny values copied.
+func (r *Recorder) snapshotAttrs(sn *snapshotter) *Recorder {
+	needs := false
+	for _, a := range r.rootAttrs {
+		needs = needs || hasAnyValue(a.Value)
+	}
+	for _, f := range r.frames {
+		for _, a := range f.attrs {
+			needs = needs || hasAnyValue(a.Value)
+		}
+	}
+	if !needs {
+		return r
+	}
+	cp := *r
+	cp.rootAttrs = make([]slog.Attr, len(r.rootAttrs))
+	for i, a := range r.rootAttrs {
+		cp.rootAttrs[i] = sn.attr(a)
+	}
+	cp.frames = make([]groupFrame, len(r.frames))
+	for i, f := range r.frames {
+		attrs := make([]slog.Attr, len(f.attrs))
+		for j, a := range f.attrs {
+			attrs[j] = sn.attr(a)
+		}
+		cp.frames[i] = groupFrame{name: f.name, attrs: attrs}
+	}
+	return &cp
 }
 
 func hasAnyValue(v slog.Value) bool {
 	switch v.Kind() {
 	case slog.KindAny:
-		return true
+		_, done := v.Any().(snapshotValue)
+		return !done
 	case slog.KindGroup:
 		for _, a := range v.Group() {
 			if hasAnyValue(a.Value) {
@@ -234,20 +322,33 @@ func hasAnyValue(v slog.Value) bool {
 	return false
 }
 
-func snapshotAttr(a slog.Attr, added *int64) slog.Attr {
+func (sn *snapshotter) attr(a slog.Attr) slog.Attr {
 	switch a.Value.Kind() {
 	case slog.KindAny:
-		a.Value = snapshotAny(a.Value.Any())
-		if raw, ok := a.Value.Any().(json.RawMessage); ok {
-			*added += int64(len(raw))
-		} else {
-			*added += int64(len(a.Value.String()))
+		v := a.Value.Any()
+		if _, done := v.(snapshotValue); done {
+			return a
+		}
+		isPointer := v != nil && reflect.TypeOf(v).Kind() == reflect.Pointer
+		if isPointer {
+			if cached, ok := sn.pointers[v]; ok {
+				a.Value = cached
+				return a
+			}
+		}
+		a.Value = snapshotAny(v)
+		sn.added += int64(len(a.Value.String()))
+		if isPointer {
+			if sn.pointers == nil {
+				sn.pointers = make(map[any]slog.Value)
+			}
+			sn.pointers[v] = a.Value
 		}
 	case slog.KindGroup:
 		group := a.Value.Group()
 		attrs := make([]slog.Attr, len(group))
 		for i, ga := range group {
-			attrs[i] = snapshotAttr(ga, added)
+			attrs[i] = sn.attr(ga)
 		}
 		a.Value = slog.GroupValue(attrs...)
 	}
@@ -266,5 +367,19 @@ func snapshotAny(v any) slog.Value {
 	if err := enc.Encode(v); err != nil {
 		return slog.StringValue("!ERROR:" + err.Error())
 	}
-	return slog.AnyValue(json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")))
+	return slog.AnyValue(snapshotValue{raw: bytes.TrimRight(buf.Bytes(), "\n")})
 }
+
+// snapshotValue is a copy of a slog.Any value taken when its scope was
+// retained, held as JSON. slog.JSONHandler writes it as the original JSON;
+// slog.TextHandler and fmt write the JSON text.
+type snapshotValue struct{ raw []byte }
+
+// MarshalJSON implements json.Marshaler.
+func (v snapshotValue) MarshalJSON() ([]byte, error) { return v.raw, nil }
+
+// MarshalText implements encoding.TextMarshaler.
+func (v snapshotValue) MarshalText() ([]byte, error) { return v.raw, nil }
+
+// String implements fmt.Stringer.
+func (v snapshotValue) String() string { return string(v.raw) }

@@ -62,15 +62,16 @@ func TestRetainedScopeIsFlushedLater(t *testing.T) {
 
 	healthyRequest(rec, log, "trace-a", "step 1", "step 2")
 	lines := out.Lines(t)
-	if len(lines) != 1 || lines[0]["msg"] != "request completed" || lines[0]["flightrec.retained"] != true {
-		t.Fatalf("want only a summary marked retained, got %+v", lines)
+	if len(lines) != 1 || lines[0]["msg"] != "request completed" ||
+		lines[0]["flightrec.retained_records"] != float64(2) || lines[0]["flightrec.dropped_records"] != float64(0) {
+		t.Fatalf("want only a summary with 2 retained and 0 dropped records, got %+v", lines)
 	}
 	if st := rec.Stats(); st.RetainedScopes != 1 || st.ScopesHealthyDropped != 0 || st.RetainedBytes <= 0 {
 		t.Fatalf("after End: %+v", st)
 	}
 
 	clock.Advance(10 * time.Second)
-	if n := rec.FlushTrace("trace-a", "remote:http_502"); n != 1 {
+	if n := rec.FlushTrace(context.Background(), "trace-a", "remote:http_502"); n != 1 {
 		t.Fatalf("FlushTrace = %d, want 1", n)
 	}
 	var msgs []string
@@ -87,7 +88,7 @@ func TestRetainedScopeIsFlushedLater(t *testing.T) {
 	if st.RetainedScopes != 0 || st.RetainedBytes != 0 || st.RetainedFlushed != 1 || st.ScopesFlushed != 1 || st.RecordsFlushed != 2 {
 		t.Errorf("after FlushTrace: %+v", st)
 	}
-	if n := rec.FlushTrace("trace-a", "again"); n != 0 {
+	if n := rec.FlushTrace(context.Background(), "trace-a", "again"); n != 0 {
 		t.Errorf("second FlushTrace = %d, want 0", n)
 	}
 }
@@ -103,7 +104,7 @@ func TestRetainedScopeExpires(t *testing.T) {
 	}
 	clock.Advance(11 * time.Second)
 
-	if n := rec.FlushTrace("trace-a", "late"); n != 0 {
+	if n := rec.FlushTrace(context.Background(), "trace-a", "late"); n != 0 {
 		t.Errorf("FlushTrace after expiry = %d, want 0", n)
 	}
 	st := rec.Stats()
@@ -126,10 +127,10 @@ func TestRetainedBytesStayWithinMaxRetained(t *testing.T) {
 	if st.RetainedEvicted == 0 || st.RetainedScopes == 0 {
 		t.Fatalf("expected evictions and some retained scopes: %+v", st)
 	}
-	if rec.FlushTrace("trace-000", "x") != 0 {
+	if rec.FlushTrace(context.Background(), "trace-000", "x") != 0 {
 		t.Error("oldest scope should have been evicted first")
 	}
-	if rec.FlushTrace("trace-099", "x") != 1 {
+	if rec.FlushTrace(context.Background(), "trace-099", "x") != 1 {
 		t.Error("newest scope should still be retained")
 	}
 }
@@ -139,7 +140,7 @@ func TestOversizedScopeDoesNotEvictOthers(t *testing.T) {
 	healthyRequest(rec, log, "small", "ok")
 	healthyRequest(rec, log, "huge", strings.Repeat("y", 8<<10))
 
-	if rec.FlushTrace("small", "x") != 1 {
+	if rec.FlushTrace(context.Background(), "small", "x") != 1 {
 		t.Error("an oversized scope evicted a smaller retained scope")
 	}
 	if st := rec.Stats(); st.RetainedEvicted != 1 {
@@ -156,7 +157,7 @@ func TestRetainedScopesPerTraceAreLimited(t *testing.T) {
 	if st.RetainedScopes != 8 || st.RetainedEvicted != 4 {
 		t.Fatalf("RetainedScopes=%d RetainedEvicted=%d, want 8 and 4", st.RetainedScopes, st.RetainedEvicted)
 	}
-	if n := rec.FlushTrace("shared-trace", "x"); n != 8 {
+	if n := rec.FlushTrace(context.Background(), "shared-trace", "x"); n != 8 {
 		t.Errorf("FlushTrace = %d, want 8", n)
 	}
 }
@@ -176,7 +177,7 @@ func TestRetainedAnyValuesAreSnapshotted(t *testing.T) {
 	sc.End(ctx, 200)
 
 	o.State = "paid" // the object is reused after the request ended
-	rec.FlushTrace("t", "x")
+	rec.FlushTrace(context.Background(), "t", "x")
 
 	ln := out.Lines(t)[1]
 	got, ok := ln["order"].(map[string]any)
@@ -194,7 +195,7 @@ func TestRetainedAnyValuesAreSnapshotted(t *testing.T) {
 func TestRetentionDisabledByDefault(t *testing.T) {
 	rec, log, _ := newRetainRecorder(t, flightrec.Options{})
 	healthyRequest(rec, log, "t", "x")
-	if n := rec.FlushTrace("t", "x"); n != 0 {
+	if n := rec.FlushTrace(context.Background(), "t", "x"); n != 0 {
 		t.Errorf("FlushTrace without Retain = %d", n)
 	}
 	if st := rec.Stats(); st.ScopesHealthyDropped != 1 || st.RetainedScopes != 0 {
@@ -223,7 +224,7 @@ func TestRetentionConcurrent(t *testing.T) {
 				id := fmt.Sprintf("trace-%d", i%20)
 				healthyRequest(rec, log, id, "a", "b")
 				if i%7 == 0 {
-					rec.FlushTrace(id, "x")
+					rec.FlushTrace(context.Background(), id, "x")
 				}
 				_ = rec.Stats()
 			}
@@ -233,5 +234,67 @@ func TestRetentionConcurrent(t *testing.T) {
 	st := rec.Stats()
 	if st.RetainedBytes < 0 || st.RetainedBytes > 64<<10 || st.ActiveScopes != 0 {
 		t.Fatalf("inconsistent stats after concurrent use: %+v", st)
+	}
+}
+
+func TestRetainedWithAttrsAreSnapshotted(t *testing.T) {
+	rec, log, out := newRetainRecorder(t, flightrec.Options{Retain: time.Minute})
+
+	o := &order{ID: 1, State: "pending"}
+	reqLog := log.With("order", o).WithGroup("req").With("tags", []string{"x"})
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t"})
+	reqLog.DebugContext(ctx, "loaded", "n", 1)
+	sc.End(ctx, 200)
+
+	o.State = "paid"
+	rec.FlushTrace(context.Background(), "t", "x")
+
+	ln := out.Lines(t)[1]
+	if got, _ := ln["order"].(map[string]any); got["state"] != "pending" {
+		t.Errorf("Logger.With value = %#v, want state pending", ln["order"])
+	}
+	if req, _ := ln["req"].(map[string]any); fmt.Sprint(req["tags"]) != "[x]" || req["n"] != float64(1) {
+		t.Errorf("group = %#v", ln["req"])
+	}
+}
+
+func TestRetainedSnapshotWithTextHandler(t *testing.T) {
+	out := &syncBuffer{}
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+		Retain:        time.Minute,
+	})
+	log := slog.New(rec)
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t"})
+	log.DebugContext(ctx, "loaded", "order", &order{ID: 3, State: "new"}, "bad", make(chan int))
+	sc.End(ctx, 200)
+	rec.FlushTrace(context.Background(), "t", "x")
+
+	text := out.String()
+	if !strings.Contains(text, `order="{\"id\":3,\"state\":\"new\"}"`) {
+		t.Errorf("TextHandler output does not show the order as JSON text: %s", text)
+	}
+	if !strings.Contains(text, "bad=") || !strings.Contains(text, "!ERROR:") {
+		t.Errorf("value JSON cannot encode should become an error string: %s", text)
+	}
+}
+
+func TestRetainedRecordWithManyAttrs(t *testing.T) {
+	rec, log, out := newRetainRecorder(t, flightrec.Options{Retain: time.Minute})
+	o := &order{ID: 9, State: "pending"}
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t"})
+	log.DebugContext(ctx, "many", "a", 1, "b", 2, "c", 3, "d", 4, "e", 5, "f", 6, "order", o)
+	sc.End(ctx, 200)
+	o.State = "paid"
+	rec.FlushTrace(context.Background(), "t", "x")
+
+	ln := out.Lines(t)[1]
+	if ln["f"] != float64(6) {
+		t.Errorf("attribute past the fifth was lost: %+v", ln)
+	}
+	if got, _ := ln["order"].(map[string]any); got["state"] != "pending" {
+		t.Errorf("order = %#v", ln["order"])
 	}
 }
