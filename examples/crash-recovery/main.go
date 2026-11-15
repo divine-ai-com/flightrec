@@ -35,6 +35,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net"
@@ -81,7 +82,7 @@ func runServer(path, listen string) error {
 	// every request. In Kubernetes, put path on an emptyDir volume.
 	stopJournal, err := rec.StartJournal(path)
 	if errors.Is(err, flightrec.ErrJournalUnsupported) {
-		fmt.Println("journal not supported on this platform")
+		fmt.Fprintln(os.Stderr, notSupported)
 		return nil
 	}
 	if err != nil {
@@ -93,6 +94,7 @@ func runServer(path, listen string) error {
 		ctx := r.Context()
 		slog.DebugContext(ctx, "loaded cart", "items", 3, "total_cents", 4598)
 		slog.DebugContext(ctx, "calling payment provider", "provider", "acme-pay", "attempt", 1)
+		fmt.Fprintln(os.Stderr, handlerWaiting) // tells the demo when to kill
 		select {
 		case <-time.After(30 * time.Second): // a payment provider that hangs
 		case <-ctx.Done():
@@ -105,7 +107,7 @@ func runServer(path, listen string) error {
 		return err
 	}
 	srv := &http.Server{Handler: flightrec.HTTPMiddleware(rec)(mux), ReadHeaderTimeout: 5 * time.Second}
-	fmt.Fprintf(os.Stderr, "listening on %s\n", ln.Addr())
+	fmt.Fprintf(os.Stderr, "%s%s\n", listeningOn, ln.Addr())
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -122,11 +124,21 @@ func runServer(path, listen string) error {
 	return stopJournal()
 }
 
+// Status lines the server writes to stderr for the demo.
+const (
+	listeningOn    = "listening on "
+	handlerWaiting = "handler waiting"
+	notSupported   = "journal not supported on this platform"
+)
+
+var errUnsupported = errors.New(notSupported)
+
 // server is a running child process started with -serve.
 type server struct {
-	cmd   *exec.Cmd
-	addr  string
-	lines chan string // stdout lines
+	cmd    *exec.Cmd
+	addr   string
+	lines  chan string // stdout: the log
+	status chan string // stderr: status lines
 }
 
 func startServer(journal string) (*server, error) {
@@ -134,7 +146,8 @@ func startServer(journal string) (*server, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(self, "-serve", "-journal", journal, "-listen", "127.0.0.1:0") //nolint:gosec // G204: runs this program again with fixed flags
+	// This program again, as the server.
+	cmd := exec.Command(self, "-serve", "-journal", journal, "-listen", "127.0.0.1:0")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -146,24 +159,50 @@ func startServer(journal string) (*server, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	s := &server{cmd: cmd, lines: make(chan string, 100)}
-	go func() {
-		sc := bufio.NewScanner(stdout)
-		for sc.Scan() {
-			s.lines <- sc.Text()
-		}
-		close(s.lines)
-	}()
-	// Recovery runs inside StartJournal, before the server listens.
-	first, err := bufio.NewReader(stderr).ReadString('\n')
-	addr, ok := strings.CutPrefix(strings.TrimSpace(first), "listening on ")
-	if err != nil || !ok {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, fmt.Errorf("server did not start: %q", first)
+	s := &server{cmd: cmd, lines: make(chan string, 100), status: make(chan string, 10)}
+	for pipe, ch := range map[io.Reader]chan string{stdout: s.lines, stderr: s.status} {
+		go func() {
+			sc := bufio.NewScanner(pipe)
+			for sc.Scan() {
+				ch <- sc.Text()
+			}
+			close(ch)
+		}()
 	}
-	s.addr = addr
+	// Recovery runs inside StartJournal, before the server listens.
+	line, err := s.wait(listeningOn)
+	if err != nil {
+		s.kill()
+		if line == notSupported {
+			return nil, errUnsupported
+		}
+		return nil, err
+	}
+	s.addr = strings.TrimPrefix(line, listeningOn)
 	return s, nil
+}
+
+// wait returns the next status line, or an error if it does not start with
+// prefix or does not come within 10 seconds.
+func (s *server) wait(prefix string) (string, error) {
+	select {
+	case line, ok := <-s.status:
+		if !ok || !strings.HasPrefix(line, prefix) {
+			return line, fmt.Errorf("server: got %q, want %q", line, prefix)
+		}
+		return line, nil
+	case <-time.After(10 * time.Second):
+		return "", fmt.Errorf("server: no %q after 10s", prefix)
+	}
+}
+
+// kill sends SIGKILL and waits for the process to exit. It is safe to call
+// more than once.
+func (s *server) kill() {
+	_ = s.cmd.Process.Kill()
+	for range s.lines { // Wait must come after the pipes are drained
+	}
+	_ = s.cmd.Wait()
 }
 
 func runDemo() error {
@@ -175,11 +214,16 @@ func runDemo() error {
 	journal := filepath.Join(dir, "flightrec.journal")
 
 	fmt.Println("== starting the server")
-	s, err := startServer(journal)
+	first, err := startServer(journal)
+	if errors.Is(err, errUnsupported) {
+		fmt.Println(notSupported)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+s.addr+"/checkout", nil)
+	defer first.kill()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+first.addr+"/checkout", nil)
 	if err != nil {
 		return err
 	}
@@ -188,35 +232,27 @@ func runDemo() error {
 			_ = resp.Body.Close()
 		}
 	}()
-	time.Sleep(500 * time.Millisecond) // the handler has logged and is waiting
-
-	fmt.Println("== kill -9 while /checkout is in flight")
-	if err := s.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+	if _, err := first.wait(handlerWaiting); err != nil {
 		return err
 	}
-	_ = s.cmd.Wait()
-	for l := range s.lines {
-		if strings.Contains(l, "not supported") {
-			fmt.Println(l)
-			return nil
-		}
-		fmt.Println("before the kill:", l) // buffered debug lines never reach the output
-	}
+
+	fmt.Println("== kill -9 while /checkout is in flight")
+	first.kill() // SIGKILL: buffered debug lines never reached the output
 
 	fmt.Println("== starting the server again")
-	s, err = startServer(journal)
+	second, err := startServer(journal)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		_ = s.cmd.Process.Signal(os.Interrupt)
-		_ = s.cmd.Wait()
+		_ = second.cmd.Process.Signal(os.Interrupt)
+		second.kill()
 	}()
 	recovered := 0
 	timeout := time.After(10 * time.Second)
 	for {
 		select {
-		case l, ok := <-s.lines:
+		case l, ok := <-second.lines:
 			if !ok {
 				return errors.New("server exited before recovering")
 			}
