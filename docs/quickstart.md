@@ -5,22 +5,23 @@ Get `flightrec` running in an existing Go service in under 10 minutes.
 ## 1. Install
 
 ```bash
-go get github.com/divine-ai-com/flightrec@v0.1.0
+go get github.com/divine-ai-com/flightrec@v0.1.1
 ```
 
 ## 2. Wrap Your `slog.Handler` (3 Changes)
 
 ```go
-// 1. Create the recorder wrapping your existing slog.Handler
-//    (Make sure the inner handler allows LevelDebug so flushed debug logs are emitted!)
-inner := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+// 1. Create the recorder wrapping your existing slog.Handler.
+//    flightrec governs level filtering via PassLeveler and BufferLeveler
+//    and writes emitted records directly to Next.Handle.
+inner := slog.NewJSONHandler(os.Stdout, nil)
 rec := flightrec.New(flightrec.Options{
-    Next:        inner,
-    PassLevel:   slog.LevelWarn,
-    BufferLevel: slog.LevelDebug,
-    SlowAfter:   2 * time.Second,
-    MaxPerScope: 256 << 10, // 256 KB per request
-    MaxTotal:    64 << 20,  // 64 MB process-wide
+    Next:          inner,
+    PassLeveler:   slog.LevelWarn,
+    BufferLeveler: slog.LevelDebug,
+    SlowAfter:     2 * time.Second,
+    MaxPerScope:   256 << 10, // 256 KB per request
+    MaxTotal:      64 << 20,  // 64 MB process-wide
 })
 
 // 2. Set as your default logger
@@ -40,7 +41,7 @@ func handleOrder(w http.ResponseWriter, r *http.Request) {
     slog.DebugContext(ctx, "parsed order payload", "items", 4)
     slog.InfoContext(ctx, "reserved inventory", "warehouse", "us-east-1")
 
-    // Written immediately (WARN >= PassLevel):
+    // Written immediately (WARN >= PassLeveler):
     slog.WarnContext(ctx, "carrier rate-limit near threshold")
 
     // Optional: explicitly force this request's buffer to flush even on HTTP 200:
@@ -54,7 +55,7 @@ func handleOrder(w http.ResponseWriter, r *http.Request) {
 
 ## 4. Background Jobs (Manual Scopes)
 
-Logs outside any HTTP/gRPC request pass straight through to `Next`. To buffer logs for a background job or worker iteration, open a scope manually:
+Logs outside any HTTP/gRPC request are filtered by `PassLeveler` and written directly to `Next`. To buffer logs for a background job or worker iteration, open a scope manually:
 
 ```go
 func processJob(parentCtx context.Context, rec *flightrec.Recorder, jobID string) (err error) {

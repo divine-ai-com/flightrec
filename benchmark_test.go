@@ -35,9 +35,9 @@ func BenchmarkPlainSlog_JSON(b *testing.B) {
 // buffered debug logs that are dropped at request end (emitting 1 summary record).
 func BenchmarkFlightRec_BufferedAndDropped(b *testing.B) {
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLevel:   slog.LevelWarn,
-		BufferLevel: slog.LevelDebug,
+		Next:          slog.NewJSONHandler(io.Discard, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
 	})
 	logger := slog.New(rec)
 	baseCtx := context.Background()
@@ -58,12 +58,12 @@ func BenchmarkFlightRec_BufferedAndDropped(b *testing.B) {
 }
 
 // BenchmarkFlightRec_PassThrough measures immediate pass-through logging
-// (Warn level >= PassLevel).
+// (Warn level >= PassLeveler).
 func BenchmarkFlightRec_PassThrough(b *testing.B) {
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLevel:   slog.LevelWarn,
-		BufferLevel: slog.LevelDebug,
+		Next:          slog.NewJSONHandler(io.Discard, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
 	})
 	logger := slog.New(rec)
 	baseCtx := context.Background()
@@ -87,9 +87,9 @@ func BenchmarkFlightRec_PassThrough(b *testing.B) {
 // all 20 buffered debug logs are flushed to the underlying JSONHandler.
 func BenchmarkFlightRec_TriggeredAndFlushed(b *testing.B) {
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLevel:   slog.LevelWarn,
-		BufferLevel: slog.LevelDebug,
+		Next:          slog.NewJSONHandler(io.Discard, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
 	})
 	logger := slog.New(rec)
 	baseCtx := context.Background()
@@ -146,9 +146,9 @@ func BenchmarkPlainSlog_JSON_SixAttrs(b *testing.B) {
 // with a child logger and six attributes per call.
 func BenchmarkFlightRec_BufferedAndDropped_SixAttrs(b *testing.B) {
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLevel:   slog.LevelWarn,
-		BufferLevel: slog.LevelDebug,
+		Next:          slog.NewJSONHandler(io.Discard, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
 	})
 	logger := slog.New(rec).With("service", "checkout", "region", "eu")
 	baseCtx := context.Background()
@@ -165,5 +165,29 @@ func BenchmarkFlightRec_BufferedAndDropped_SixAttrs(b *testing.B) {
 			logger.DebugContext(ctx, "db query executed", "table", "orders", "rows", j, "cached", true, "shard", 3, "dur_ms", 12, "user", "u-42")
 		}
 		sc.End(ctx, 200)
+	}
+}
+
+// BenchmarkFlightRec_OutOfScope_WithAttrs measures logging outside a scope
+// using a child logger with five pre-formatted .With attributes.
+func BenchmarkFlightRec_OutOfScope_WithAttrs(b *testing.B) {
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewJSONHandler(io.Discard, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+	})
+	logger := slog.New(rec).With(
+		"service", "checkout",
+		"region", "eu-central-1",
+		"env", "prod",
+		"version", "1.4.2",
+		"instance", "pod-09",
+	)
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		logger.WarnContext(ctx, "background tick", "iter", i)
 	}
 }
