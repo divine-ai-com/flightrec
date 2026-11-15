@@ -163,7 +163,7 @@ func processJob(ctx context.Context, rec *flightrec.Recorder, jobID string) (err
 
 ### gRPC
 
-Use the `github.com/divine-ai-com/flightrec/grpcflightrec` submodule for ready-to-use unary and stream server interceptors that extract trace IDs from incoming gRPC metadata (`traceparent`, `x-trace-id`, `x-request-id`):
+Use the `github.com/divine-ai-com/flightrec/grpcflightrec` module. Server interceptors open a scope per RPC, read the trace ID from incoming metadata (`traceparent`, `x-trace-id`, `x-request-id`), and set the `flightrec-flush` trailer when the RPC is kept. Client interceptors read that trailer, as `NewTransport` does for HTTP (see [Keep logs across services](#keep-logs-across-services)):
 
 ```go
 import "github.com/divine-ai-com/flightrec/grpcflightrec"
@@ -171,6 +171,12 @@ import "github.com/divine-ai-com/flightrec/grpcflightrec"
 srv := grpc.NewServer(
 	grpc.UnaryInterceptor(grpcflightrec.UnaryServerInterceptor(rec)),
 	grpc.StreamInterceptor(grpcflightrec.StreamServerInterceptor(rec)),
+)
+
+conn, err := grpc.NewClient(target,
+	grpc.WithUnaryInterceptor(grpcflightrec.UnaryClientInterceptor()),
+	grpc.WithStreamInterceptor(grpcflightrec.StreamClientInterceptor()),
+	// credentials and other options
 )
 ```
 
@@ -202,6 +208,40 @@ rec := flightrec.New(flightrec.Options{
 	}),
 })
 ```
+
+### Keep logs across services
+
+A failure in one service usually starts in a request that passed through several. flightrec can keep the logs of every service that handled the request, not only the one that failed. Each service needs the same trace ID for the request: OpenTelemetry propagation, or `X-Request-Id` set on outgoing calls, provides it.
+
+**When the caller sees the failure.** A service whose request is kept marks its response with a `Flightrec-Flush` header (gRPC: a trailer). Wrap outgoing clients so the caller keeps its own logs for that request; its response is marked in turn, so the flush travels up the chain:
+
+```go
+client := &http.Client{Transport: flightrec.NewTransport(http.DefaultTransport)}
+```
+
+**When the caller has already finished.** A service that answered before the failure happened (an asynchronous call, a queue consumer, a parallel call to another service) keeps its buffers for a while with `Retain`, and a notifier tells it about the failure:
+
+```go
+rec := flightrec.New(flightrec.Options{
+	Next:   handler,
+	Retain: 30 * time.Second, // keep healthy requests' logs this long
+})
+
+n, err := redisnotifier.New(redisClient, redisnotifier.WithChannel("flightrec:prod"))
+if err != nil {
+	return err
+}
+stop := rec.StartNotifier(ctx, n)
+defer stop()
+```
+
+Notifiers ship as separate modules: [`notifier/redisnotifier`](notifier/redisnotifier) (Redis pub/sub) and [`notifier/natsnotifier`](notifier/natsnotifier) (NATS). [`notifier/memnotifier`](notifier/memnotifier) connects Recorders in one process.
+
+Logs kept this way carry the reason `downstream:<reason>` or `remote:<reason>`, so you can see why a service that succeeded wrote its logs. Both mechanisms are best effort: a response header a proxy strips, a notice published while a service is disconnected, or a retained buffer that has expired means those logs are missing.
+
+On a service that answers clients outside your system, set `DisableFlushMarker: true` and `IgnoreRequestTraceIDs: true`, so you neither tell outsiders about your failures nor let them choose the trace IDs your logs are grouped by.
+
+[`examples/cross-service`](examples/cross-service) runs three services through both cases, in one process or with Docker Compose and Redis.
 
 ### Choose what is buffered
 
@@ -261,6 +301,9 @@ slog.Info("flightrec",
 | The request took `SlowAfter` or longer | `slow_request` |
 | A span in the trace ended with `codes.Error`, recorded an `"exception"` event, or exceeded `SlowAfter` (`otelflightrec`) | `span_error`, `span_exception`, `slow_trace` |
 | The code called `flightrec.Flush(ctx, reason)` or `otelflightrec.FlushTrace(ctx, sp, reason)` | the reason given |
+| A service this request called kept its logs (`NewTransport`, gRPC client interceptors) | `downstream:<reason>` |
+| Another service, or another scope in this process, kept its logs for the same trace (`StartNotifier`, `Retain`) | `remote:<reason>` |
+| The code called `Recorder.FlushTrace(ctx, traceID, reason)` | the reason given |
 
 ## Performance
 
@@ -306,11 +349,11 @@ The demo is synthetic: every record is at Debug level, so the 92.5% reduction fo
 
 ## Limits
 
-- **Single-service decisions.** `otelflightrec` coordinates logs and OpenTelemetry traces within one process; cross-service flush propagation is planned for v0.3.
-- **One service.** A failure does not yet flush the buffers of upstream or downstream services. Planned for v0.3.
+- **Spans stay in one process.** Cross-service flush keeps logs in other services. `otelflightrec` keeps spans only in the process where the scope was triggered; a service flushed by a remote notice has already exported or dropped its spans.
+- **Cross-service flush is best effort.** See [Keep logs across services](#keep-logs-across-services).
 - **A hard kill loses the buffer.** Panics are flushed. `SIGKILL` and out-of-memory kills are not, until v0.4.
 - **The context must be passed.** `slog.Debug(...)` without a context has no request to attach to and is handled as a log outside a request.
-- **Values are captured by reference.** Attributes implementing `slog.LogValuer` are resolved when buffered at log time, but a raw pointer, map, or slice logged with `slog.Any` shows its state at flush time.
+- **Values are captured by reference until a request ends.** Attributes implementing `slog.LogValuer` are resolved when buffered. A pointer, map or slice logged with `slog.Any` shows its state when the request ends; with `Retain`, a copy is taken then, which costs time on healthy requests that log many distinct pointers.
 
 ## Stability
 
