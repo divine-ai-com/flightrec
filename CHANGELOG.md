@@ -4,6 +4,10 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Security
+- With `Retain` or `StartJournal`, `slog.Any` values were copied as JSON only, so `slog.TextHandler` and other handlers that print values with `String` or `MarshalText` showed the raw value: a type that redacts itself in `String` (a password type printing `***`) leaked once either feature was on. Copies now keep the text rendering the original value produces, and the JSON rendering for JSON handlers.
+- Copied `slog.Any` values are capped at 64 KB each, and copying for `Retain` stops once a scope's copies exceed `MaxRetained`, so large values cannot make retention allocate far beyond its limits.
+
 ### Changed
 - With OpenTelemetry middleware inside `HTTPMiddleware`, a scope keyed by a request header (`traceparent`, `X-Trace-Id`, `X-Request-Id`) takes the server span's trace ID when the span starts, as a generated ID already did, so logs and spans agree in either middleware order. The header ID stays an alias: notifier notices for it still reach the scope (and its child scopes), failures are announced under both IDs, the per-trace cap of retained scopes applies to both, and flushed records and the summary line carry it as `flightrec.request_id`. The adoption is journaled, so recovered records carry the same IDs (#96).
 

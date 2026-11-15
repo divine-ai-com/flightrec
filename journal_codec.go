@@ -123,7 +123,8 @@ const (
 	tagDuration
 	tagTime
 	tagGroup
-	tagJSON
+	tagJSON     // JSON only: written by v0.4 and v0.5
+	tagSnapshot // JSON and text renderings of a slog.Any value
 )
 
 func appendJString(b []byte, s string) []byte {
@@ -193,12 +194,14 @@ func appendJAttr(b []byte, a slog.Attr, depth int) []byte {
 		// slog.Any: the same copy retention takes. Errors and values JSON
 		// cannot encode come back as strings; the rest is JSON text.
 		sv := snapshotAny(v.Any())
-		if sv.Kind() == slog.KindString {
-			b = append(b, tagString)
+		if s, ok := sv.Any().(snapshotValue); ok {
+			b = append(b, tagSnapshot)
+			b = appendJString(b, string(s.raw))
+			b = appendJString(b, s.text)
 		} else {
-			b = append(b, tagJSON)
+			b = append(b, tagString)
+			b = appendJString(b, sv.String())
 		}
-		b = appendJString(b, sv.String())
 	}
 	return b
 }
@@ -324,7 +327,11 @@ func (d *decoder) attrs(depth int) []slog.Attr {
 		case tagGroup:
 			v = slog.GroupValue(d.attrs(depth + 1)...)
 		case tagJSON:
-			v = slog.AnyValue(snapshotValue{raw: []byte(d.string())})
+			raw := d.string()
+			v = slog.AnyValue(snapshotValue{raw: []byte(raw), text: raw})
+		case tagSnapshot:
+			raw := d.string()
+			v = slog.AnyValue(snapshotValue{raw: []byte(raw), text: d.string()})
 		default:
 			d.fail()
 		}

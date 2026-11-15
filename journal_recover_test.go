@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -568,3 +569,45 @@ func TestRecoveryLabelsAdoptedAndExplicitScopes(t *testing.T) {
 }
 
 type spanKey struct{}
+
+// pass redacts itself when printed.
+type pass string
+
+func (pass) String() string { return "***" }
+
+// TestJournalKeepsStringRedaction checks that a value that redacts itself in
+// String is recovered redacted for text handlers, as the original would print.
+func TestJournalKeepsStringRedaction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j")
+	r := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug})
+	if _, err := r.StartJournal(path, WithJournalSize(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, _ := StartScope(context.Background(), r, ScopeMeta{TraceID: "t"})
+	slog.New(r).DebugContext(ctx, "login", "pw", struct{ P pass }{"hunter2"})
+	crash(t, r)
+
+	var out bytes.Buffer
+	if _, err := recoverInto(t, path, slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "pw={P:***}") {
+		t.Errorf("recovered text output: %s", out.String())
+	}
+}
+
+func TestSnapshotBudget(t *testing.T) {
+	big := map[string]string{}
+	for i := range 4000 {
+		big[strconv.Itoa(i)] = strings.Repeat("x", 30)
+	}
+	if v := snapshotAny(big).Any().(snapshotValue); string(v.raw) != `"`+snapshotTruncated+`"` || v.text != snapshotTruncated {
+		t.Errorf("value over %d bytes not truncated: %d/%d bytes", maxSnapshotValue, len(v.raw), len(v.text))
+	}
+	sn := snapshotter{budget: 100}
+	sn.attr(slog.Any("a", map[string]int{"k": 1}))
+	sn.added = 101
+	if got := sn.attr(slog.Any("b", map[string]int{"k": 2})); got.Value.String() != "!TRUNCATED: retained budget exceeded" {
+		t.Errorf("copy past the budget: %v", got.Value)
+	}
+}
