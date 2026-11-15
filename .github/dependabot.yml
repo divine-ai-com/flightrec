@@ -1,11 +1,15 @@
 version: 2
 updates:
+  # Library minimums are raised only when needed. Version updates are off;
+  # Dependabot security updates (a repository setting) still open PRs for
+  # vulnerable dependencies.
   - package-ecosystem: gomod
     directories:
       - /grpcflightrec
       - /otelflightrec
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: build
       include: scope
