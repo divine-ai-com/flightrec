@@ -176,6 +176,33 @@ srv := grpc.NewServer(
 
 Or use `flightrec.InvokeGRPCUnary` and `flightrec.InvokeGRPCStream` directly from the zero-dependency root module.
 
+### OpenTelemetry traces and logs
+
+Use the `github.com/divine-ai-com/flightrec/otelflightrec` submodule to buffer finished child spans per trace and export them only when the trace or its linked `flightrec.Scope` triggers:
+
+```go
+import "github.com/divine-ai-com/flightrec/otelflightrec"
+
+sp := otelflightrec.NewSpanProcessor(otelflightrec.SpanProcessorOptions{
+	Next:          sdktrace.NewBatchSpanProcessor(spanExporter),
+	Recorder:      rec,                                  // shares triggers between logs and traces
+	HealthyPolicy: otelflightrec.HealthyExportRootOnly, // or HealthyExportNone
+	SlowAfter:     2 * time.Second,
+})
+tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
+```
+
+To bridge `slog` records directly to OpenTelemetry Logs (`go.opentelemetry.io/otel/log`) with log-time `TraceID` and child `SpanID` correlation:
+
+```go
+rec := flightrec.New(flightrec.Options{
+	Next: otelflightrec.NewLogHandler(otelflightrec.LogHandlerOptions{
+		LoggerProvider: logProvider,
+		Next:           slog.NewJSONHandler(os.Stdout, nil), // optional stdout mirror
+	}),
+})
+```
+
 ### Choose what is buffered
 
 | Option | Default | Effect |
@@ -214,6 +241,7 @@ slog.Info("flightrec",
 | Attribute | On | Meaning |
 | --- | --- | --- |
 | `flightrec.trace_id` | every record in a request | The request's trace ID |
+| `flightrec.span_id` | records logged inside an active OpenTelemetry span | The 16-hex-char ID of the span active at log time |
 | `flightrec.flush_reason` | flushed records | Why the request was kept (see below) |
 | `flightrec.truncated`, `flightrec.dropped_records` | first flushed record, if records were lost | The buffer hit a memory limit |
 | `duration`, `status` (or `grpc.code`), `method`, `path`, `flightrec.dropped_records` | the summary line | Outcome of a healthy request |
@@ -225,7 +253,8 @@ slog.Info("flightrec",
 | A gRPC server fault (`Unknown`, `DeadlineExceeded`, `Unimplemented`, `Internal`, `Unavailable`, `DataLoss`) or non-gRPC error (client codes like `NotFound`, `InvalidArgument`, `Canceled` do not flush; `DeadlineExceeded` does flush) | `grpc_error` |
 | The handler panicked, except `http.ErrAbortHandler` (the panic is re-raised after the flush) | `panic` |
 | The request took `SlowAfter` or longer | `slow_request` |
-| The code called `flightrec.Flush(ctx, reason)` | the reason given |
+| A span in the trace ended with `codes.Error`, recorded an `"exception"` event, or exceeded `SlowAfter` (`otelflightrec`) | `span_error`, `span_exception`, `slow_trace` |
+| The code called `flightrec.Flush(ctx, reason)` or `otelflightrec.FlushTrace(ctx, sp, reason)` | the reason given |
 
 ## Performance
 
@@ -271,7 +300,7 @@ The demo is synthetic: every record is at Debug level, so the 92.5% reduction fo
 
 ## Limits
 
-- **Logs only.** Traces are planned for v0.2.
+- **Single-service decisions.** `otelflightrec` coordinates logs and OpenTelemetry traces within one process; cross-service flush propagation is planned for v0.3.
 - **One service.** A failure does not yet flush the buffers of upstream or downstream services. Planned for v0.3.
 - **A hard kill loses the buffer.** Panics are flushed. `SIGKILL` and out-of-memory kills are not, until v0.4.
 - **The context must be passed.** `slog.Debug(...)` without a context has no request to attach to and is handled as a log outside a request.

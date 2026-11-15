@@ -18,3 +18,9 @@
 **Cause:** The single request produced more than `Options.MaxPerScope` bytes (default 256 KB, including ring-buffer slot capacity) of buffered records, or process-wide buffered memory reached `Options.MaxTotal` (default 64 MB).
 
 **Fix:** Check `rec.Stats()` (`RecordsDroppedPerScopeCap` vs `ScopesEvictedTotalCap`) and either reduce overly large log attributes in hot loops or raise `MaxPerScope` / `MaxTotal`.
+
+## 4. Child spans are not appearing in my tracing backend for healthy requests
+
+**Cause:** By default, `otelflightrec.SpanProcessor` uses `HealthyExportRootOnly`, which discards child spans for healthy traces and exports only the local root span (annotated with `flightrec.dropped_spans`).
+
+**Fix:** Child spans are exported automatically whenever the trace or its linked `flightrec.Scope` triggers (a span with `codes.Error`, an exception event, duration `>= SlowAfter`, an `ERROR` log, HTTP 5xx, gRPC server fault, panic, or `flightrec.Flush(ctx, reason)` / `otelflightrec.FlushTrace(ctx, sp, reason)`).

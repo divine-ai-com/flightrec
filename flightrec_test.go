@@ -1008,3 +1008,95 @@ func TestConcurrentStressWithRaceDetector(t *testing.T) {
 		t.Fatalf("leaked active scopes or bytes: %+v", st)
 	}
 }
+
+type testObserver struct {
+	mu        sync.Mutex
+	started   []string
+	triggered []string
+	ended     []string
+}
+
+func (o *testObserver) OnScopeStart(_ context.Context, _ *flightrec.Scope, traceID string) {
+	o.mu.Lock()
+	o.started = append(o.started, traceID)
+	o.mu.Unlock()
+}
+
+func (o *testObserver) OnScopeTrigger(_ *flightrec.Scope, traceID, reason string) {
+	o.mu.Lock()
+	o.triggered = append(o.triggered, traceID+":"+reason)
+	o.mu.Unlock()
+}
+
+func (o *testObserver) OnScopeEnd(_ *flightrec.Scope, traceID string, triggered bool, reason string) {
+	o.mu.Lock()
+	o.ended = append(o.ended, traceID+":"+reason)
+	o.mu.Unlock()
+}
+
+func TestTraceBridgeAndScopeObserver(t *testing.T) {
+	type spanCtxKey struct{}
+	wantTraceID, ok := flightrec.ParseTraceIDHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	if !ok {
+		t.Fatal("expected valid 32-hex TraceID")
+	}
+	wantSpanID := [8]byte{0x00, 0xf0, 0x67, 0xaa, 0x0b, 0xa9, 0x02, 0xb7}
+
+	var injectedTrace [16]byte
+	var injectedSpan [8]byte
+
+	out := &syncBuffer{}
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewJSONHandler(out, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+		TraceExtractor: func(ctx context.Context) flightrec.TraceContext {
+			if tc, ok := ctx.Value(spanCtxKey{}).(flightrec.TraceContext); ok {
+				return tc
+			}
+			return flightrec.TraceContext{}
+		},
+		TraceInjector: func(ctx context.Context, tc flightrec.TraceContext) context.Context {
+			injectedTrace = tc.TraceID
+			injectedSpan = tc.SpanID
+			return ctx
+		},
+	})
+	obs := &testObserver{}
+	rec.AttachObserver(obs)
+	rec.AttachObserver(obs) // duplicate registration must be ignored
+
+	logger := slog.New(rec)
+
+	baseCtx := context.WithValue(context.Background(), spanCtxKey{}, flightrec.TraceContext{
+		TraceID: wantTraceID,
+		SpanID:  wantSpanID,
+	})
+
+	ctx, sc := flightrec.StartScope(baseCtx, rec, flightrec.ScopeMeta{})
+	if sc.TraceID() != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("expected scope to extract TraceID from TraceExtractor, got %q", sc.TraceID())
+	}
+
+	logger.DebugContext(ctx, "buffered with span", "step", 1)
+	flightrec.Flush(ctx, "custom_reason")
+	sc.End(ctx, 200)
+
+	lines := out.Lines(t)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 flushed line, got %d", len(lines))
+	}
+	if lines[0]["flightrec.trace_id"] != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("unexpected trace_id: %v", lines[0]["flightrec.trace_id"])
+	}
+	if lines[0]["flightrec.span_id"] != "00f067aa0ba902b7" {
+		t.Fatalf("expected flightrec.span_id=00f067aa0ba902b7, got %v", lines[0]["flightrec.span_id"])
+	}
+	if injectedTrace != wantTraceID || injectedSpan != wantSpanID {
+		t.Fatalf("expected TraceInjector to receive log-time TraceID/SpanID")
+	}
+
+	if len(obs.started) != 1 || len(obs.triggered) != 1 || len(obs.ended) != 1 {
+		t.Fatalf("unexpected observer counts: started=%v triggered=%v ended=%v", obs.started, obs.triggered, obs.ended)
+	}
+}
