@@ -10,11 +10,11 @@ import (
 	"encoding/hex"
 	"io"
 	"log/slog"
-	"math/big"
 	mrand "math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -23,12 +23,10 @@ const (
 	// DefaultMaxTotal is the default process-wide buffer cap (64 MB).
 	DefaultMaxTotal int64 = 64 << 20
 
-	// baseRecordOverhead estimates the in-memory footprint of a slog.Record
-	// struct and ring-buffer slot before message and attribute payloads.
-	baseRecordOverhead int64 = 128
-
-	initialRingCapacity = 32
+	initialRingCapacity = 24
 	maxPooledRingCap    = 512
+
+	entrySlotSize = int64(unsafe.Sizeof(bufferedEntry{}))
 )
 
 var ringBufPool = sync.Pool{
@@ -43,28 +41,51 @@ type Options struct {
 	// Next is the underlying slog.Handler where passed-through, flushed,
 	// and healthy summary records are written. If nil, a default JSONHandler
 	// writing to io.Discard is used.
+	//
+	// Outside a request scope, Next.Enabled and Next.Handle are called
+	// directly. Inside a request scope, PassLeveler and BufferLeveler govern
+	// buffering, and flushed records are sent directly to Next.Handle
+	// regardless of Next's configured level.
 	Next slog.Handler
 
+	// PassLeveler is the minimum level written immediately to Next without
+	// buffering inside a scope. Takes precedence over PassLevel when non-nil.
+	// Defaults to slog.LevelWarn when both PassLeveler and PassLevel are unset.
+	PassLeveler slog.Leveler
+
+	// BufferLeveler is the minimum level stored in a request scope's buffer
+	// and emitted only if the scope triggers. Takes precedence over
+	// BufferLevel when non-nil. Defaults to slog.LevelDebug when both
+	// BufferLeveler and BufferLevel are unset.
+	BufferLeveler slog.Leveler
+
 	// PassLevel is the minimum level written immediately to Next without
-	// buffering. Defaults to slog.LevelWarn when both PassLevel and
-	// BufferLevel are zero.
+	// buffering inside a scope. Defaults to slog.LevelWarn when unset (zero).
+	//
+	// Deprecated: Use PassLeveler instead, which distinguishes slog.LevelInfo
+	// (zero) from an unset value.
 	PassLevel slog.Level
 
 	// BufferLevel is the minimum level stored in a request scope's buffer
 	// and emitted only if the scope triggers. Defaults to slog.LevelDebug
-	// when zero.
+	// when unset (zero).
+	//
+	// Deprecated: Use BufferLeveler instead, which distinguishes slog.LevelInfo
+	// (zero) from an unset value.
 	BufferLevel slog.Level
 
 	// SlowAfter triggers a scope flush when a request's total duration
 	// meets or exceeds this threshold. Zero disables slow-request triggering.
 	SlowAfter time.Duration
 
-	// MaxPerScope caps buffered bytes for a single request scope.
-	// Defaults to DefaultMaxPerScope (256 KB) when <= 0.
+	// MaxPerScope caps buffered bytes (including ring-buffer slot capacity)
+	// for a single request scope. Defaults to DefaultMaxPerScope (256 KB)
+	// when <= 0.
 	MaxPerScope int64
 
-	// MaxTotal caps buffered bytes across all active scopes in the process.
-	// Defaults to DefaultMaxTotal (64 MB) when <= 0.
+	// MaxTotal caps buffered bytes (including ring-buffer slot capacity)
+	// across all active scopes in the process. Defaults to DefaultMaxTotal
+	// (64 MB) when <= 0.
 	MaxTotal int64
 
 	// DisableHealthySummary disables writing the single summary log line when
@@ -91,19 +112,30 @@ type Stats struct {
 	RecordsDroppedTotalCap    uint64
 }
 
-// Recorder is a slog.Handler that buffers records below PassLevel per request
-// scope and flushes them to Next only when the scope triggers.
+type groupFrame struct {
+	name  string
+	attrs []slog.Attr
+}
+
+// Recorder is a slog.Handler that buffers records below PassLeveler per
+// request scope and flushes them to Next only when the scope triggers.
+//
+// Values implementing slog.LogValuer are resolved at log time before
+// buffering; raw pointers, slices, and maps that do not implement
+// slog.LogValuer are captured by reference.
 type Recorder struct {
-	state  *recorderState
-	next   slog.Handler
-	groups []string
-	attrs  []slog.Attr
+	state     *recorderState
+	next      slog.Handler
+	rootAttrs []slog.Attr
+	frames    []groupFrame
 }
 
 type recorderState struct {
-	opts     Options
-	baseNext slog.Handler
-	now      func() time.Time
+	opts          Options
+	baseNext      slog.Handler
+	passLeveler   slog.Leveler
+	bufferLeveler slog.Leveler
+	now           func() time.Time
 
 	totalBytes   atomic.Int64
 	activeScopes atomic.Int64
@@ -124,17 +156,38 @@ type recorderState struct {
 	newest *Scope
 }
 
+func (st *recorderState) passLevel() slog.Level {
+	return st.passLeveler.Level()
+}
+
+func (st *recorderState) bufferLevel() slog.Level {
+	return st.bufferLeveler.Level()
+}
+
 // New creates a new Recorder with the given Options.
 func New(opts Options) *Recorder {
 	if opts.Next == nil {
 		opts.Next = slog.NewJSONHandler(io.Discard, nil)
 	}
-	if opts.PassLevel == 0 && opts.BufferLevel == 0 {
-		opts.PassLevel = slog.LevelWarn
-		opts.BufferLevel = slog.LevelDebug
-	} else if opts.BufferLevel == 0 && opts.PassLevel > slog.LevelDebug {
-		opts.BufferLevel = slog.LevelDebug
+
+	passLeveler := opts.PassLeveler
+	if passLeveler == nil {
+		if opts.PassLevel != 0 {
+			passLeveler = opts.PassLevel
+		} else {
+			passLeveler = slog.LevelWarn
+		}
 	}
+
+	bufferLeveler := opts.BufferLeveler
+	if bufferLeveler == nil {
+		if opts.BufferLevel != 0 {
+			bufferLeveler = opts.BufferLevel
+		} else {
+			bufferLeveler = slog.LevelDebug
+		}
+	}
+
 	if opts.MaxPerScope <= 0 {
 		opts.MaxPerScope = DefaultMaxPerScope
 	}
@@ -150,9 +203,11 @@ func New(opts Options) *Recorder {
 	}
 
 	st := &recorderState{
-		opts:     opts,
-		baseNext: opts.Next,
-		now:      nowFn,
+		opts:          opts,
+		baseNext:      opts.Next,
+		passLeveler:   passLeveler,
+		bufferLeveler: bufferLeveler,
+		now:           nowFn,
 	}
 	return &Recorder{
 		state: st,
@@ -180,38 +235,49 @@ func (r *Recorder) Stats() Stats {
 }
 
 // Enabled implements slog.Handler.
+//
+// Inside a scope, records at or above BufferLeveler or PassLeveler are enabled.
+// Outside a scope, Enabled delegates to Options.Next.Enabled.
 func (r *Recorder) Enabled(ctx context.Context, level slog.Level) bool {
-	if scopeFromContext(ctx) != nil {
-		return level >= r.state.opts.BufferLevel || level >= r.state.opts.PassLevel
+	st := r.state
+	sc := scopeFromContext(ctx)
+	if sc != nil && sc.state == st {
+		return level >= st.bufferLevel() || level >= st.passLevel()
 	}
 	return r.next.Enabled(ctx, level)
 }
 
 // Handle implements slog.Handler.
 func (r *Recorder) Handle(ctx context.Context, rec slog.Record) error {
+	st := r.state
 	sc := scopeFromContext(ctx)
-	if sc == nil || sc.state != r.state {
-		r.state.recordsPassedThrough.Add(1)
+	if sc == nil || sc.state != st {
+		st.recordsPassedThrough.Add(1)
 		return r.next.Handle(ctx, rec)
 	}
 
-	st := r.state
-	if rec.Level >= st.opts.PassLevel {
+	if rec.Level >= st.passLevel() {
 		if rec.Level >= slog.LevelError {
 			sc.Trigger("error_log")
 		}
 		st.recordsPassedThrough.Add(1)
-		outRec := buildOutputRecord(rec, r.groups, r.attrs, sc.meta.TraceID, "", false, 0)
+		outRec := r.buildOutputRecord(rec, sc.meta.TraceID, "", false, 0)
 		return st.baseNext.Handle(ctx, outRec)
 	}
 
-	if rec.Level < st.opts.BufferLevel {
+	if rec.Level < st.bufferLevel() {
 		return nil
 	}
 
-	cloned := rec.Clone()
-	size := estimateRecordSize(&cloned, r.attrs)
-	sc.bufferRecord(cloned, r.groups, r.attrs, size)
+	cloned := cloneAndResolveRecord(rec)
+	payloadSize := estimateRecordPayloadSize(&cloned, r)
+	if !sc.bufferRecord(cloned, r, payloadSize) {
+		// The scope has already ended; pass the late record through so it is
+		// neither silently lost nor uncounted.
+		st.recordsPassedThrough.Add(1)
+		outRec := r.buildOutputRecord(cloned, sc.meta.TraceID, "", false, 0)
+		return st.baseNext.Handle(ctx, outRec)
+	}
 	return nil
 }
 
@@ -220,18 +286,39 @@ func (r *Recorder) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return r
 	}
-	newAttrs := make([]slog.Attr, len(r.attrs), len(r.attrs)+len(attrs))
-	copy(newAttrs, r.attrs)
-	if len(r.groups) == 0 {
-		newAttrs = append(newAttrs, attrs...)
-	} else {
-		newAttrs = append(newAttrs, wrapAttrsInGroups(r.groups, attrs))
+	cleaned := cleanAttrs(attrs)
+	nextHandler := r.next.WithAttrs(attrs)
+	if len(cleaned) == 0 {
+		return &Recorder{
+			state:     r.state,
+			next:      nextHandler,
+			rootAttrs: r.rootAttrs,
+			frames:    r.frames,
+		}
 	}
+	if len(r.frames) == 0 {
+		newRoot := make([]slog.Attr, len(r.rootAttrs), len(r.rootAttrs)+len(cleaned))
+		copy(newRoot, r.rootAttrs)
+		newRoot = append(newRoot, cleaned...)
+		return &Recorder{
+			state:     r.state,
+			next:      nextHandler,
+			rootAttrs: newRoot,
+			frames:    r.frames,
+		}
+	}
+	newFrames := make([]groupFrame, len(r.frames))
+	copy(newFrames, r.frames)
+	last := &newFrames[len(newFrames)-1]
+	merged := make([]slog.Attr, len(last.attrs), len(last.attrs)+len(cleaned))
+	copy(merged, last.attrs)
+	merged = append(merged, cleaned...)
+	last.attrs = merged
 	return &Recorder{
-		state:  r.state,
-		next:   r.next.WithAttrs(attrs),
-		groups: r.groups,
-		attrs:  newAttrs,
+		state:     r.state,
+		next:      nextHandler,
+		rootAttrs: r.rootAttrs,
+		frames:    newFrames,
 	}
 }
 
@@ -240,14 +327,14 @@ func (r *Recorder) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return r
 	}
-	newGroups := make([]string, len(r.groups)+1)
-	copy(newGroups, r.groups)
-	newGroups[len(r.groups)] = name
+	newFrames := make([]groupFrame, len(r.frames)+1)
+	copy(newFrames, r.frames)
+	newFrames[len(r.frames)] = groupFrame{name: name}
 	return &Recorder{
-		state:  r.state,
-		next:   r.next.WithGroup(name),
-		groups: newGroups,
-		attrs:  r.attrs,
+		state:     r.state,
+		next:      r.next.WithGroup(name),
+		rootAttrs: r.rootAttrs,
+		frames:    newFrames,
 	}
 }
 
@@ -261,10 +348,9 @@ type ScopeMeta struct {
 }
 
 type bufferedEntry struct {
-	rec    slog.Record
-	groups []string
-	attrs  []slog.Attr
-	size   int64
+	rec      slog.Record
+	recorder *Recorder
+	size     int64
 }
 
 // Scope represents a single request or unit-of-work buffer.
@@ -277,6 +363,8 @@ type Scope struct {
 	buf               []bufferedEntry
 	head              int
 	count             int
+	ringBytes         int64
+	payloadBytes      int64
 	bytes             int64
 	triggered         bool
 	triggerReason     string
@@ -294,21 +382,23 @@ type Scope struct {
 // StartScope opens a new request Scope associated with rec and returns a
 // derived context along with the Scope. Callers must call Scope.End when the
 // unit of work finishes.
+//
+// The underlying ring buffer is allocated lazily on the first buffered record.
 func StartScope(ctx context.Context, rec *Recorder, meta ScopeMeta) (context.Context, *Scope) {
+	if meta.TraceID == "" {
+		meta.TraceID = TraceID(ctx)
+	}
 	if meta.TraceID == "" {
 		meta.TraceID = generateTraceID()
 	}
 	st := rec.state
-	bp := ringBufPool.Get().(*[]bufferedEntry)
 	sc := &Scope{
 		state:     st,
 		meta:      meta,
 		startTime: st.now(),
-		buf:       *bp,
 	}
 	st.activeScopes.Add(1)
 	st.scopesStarted.Add(1)
-	st.linkScope(sc)
 	return context.WithValue(ctx, scopeContextKey{}, sc), sc
 }
 
@@ -355,81 +445,131 @@ func (s *Scope) Trigger(reason string) {
 	s.mu.Unlock()
 }
 
-func (s *Scope) bufferRecord(rec slog.Record, groups []string, attrs []slog.Attr, size int64) {
+func (s *Scope) bufferRecord(rec slog.Record, recorder *Recorder, payloadSize int64) bool {
 	st := s.state
 	maxPerScope := st.opts.MaxPerScope
 
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return
+		return false
 	}
 
-	if size > maxPerScope {
+	if entrySlotSize+payloadSize > maxPerScope {
 		s.truncated = true
 		s.droppedInScope++
 		s.mu.Unlock()
 		st.recordsDroppedPerScopeCap.Add(1)
-		return
+		return true
 	}
 
-	var freedBytes int64
+	prevBytes := s.bytes
 	var evictedCount uint64
-	for s.count > 0 && s.bytes+size > maxPerScope {
-		old := s.popOldestLocked()
-		freedBytes += old.size
+
+	if len(s.buf) == 0 {
+		s.initRingLocked(payloadSize, maxPerScope)
+	} else if s.count == len(s.buf) {
+		if !s.tryGrowRingLocked(payloadSize, maxPerScope) {
+			_ = s.popOldestLocked()
+			evictedCount++
+		}
+	}
+
+	for s.count > 0 && s.ringBytes+s.payloadBytes+payloadSize > maxPerScope {
+		_ = s.popOldestLocked()
 		evictedCount++
 	}
+
 	if evictedCount > 0 {
 		s.truncated = true
 		s.droppedInScope += evictedCount
 		st.recordsDroppedPerScopeCap.Add(evictedCount)
 	}
 
-	s.pushBackLocked(bufferedEntry{
-		rec:    rec,
-		groups: groups,
-		attrs:  attrs,
-		size:   size,
-	})
-	s.bytes += size
+	idx := (s.head + s.count) % len(s.buf)
+	s.buf[idx] = bufferedEntry{
+		rec:      rec,
+		recorder: recorder,
+		size:     payloadSize,
+	}
+	s.count++
+	s.payloadBytes += payloadSize
+	s.bytes = s.ringBytes + s.payloadBytes
+	delta := s.bytes - prevBytes
+	if s.bytes > 0 {
+		// Hold s.mu while linking so a scope that is closing concurrently
+		// can never be re-linked after End. Lock order is always s.mu -> listMu.
+		st.ensureLinked(s)
+	}
 	s.mu.Unlock()
 
 	st.recordsBuffered.Add(1)
-	delta := size - freedBytes
 	newTotal := st.totalBytes.Add(delta)
 	if newTotal > st.opts.MaxTotal {
 		st.enforceTotalCap(s)
 	}
+	return true
 }
 
-func (s *Scope) pushBackLocked(e bufferedEntry) {
-	if len(s.buf) == 0 {
+func (s *Scope) initRingLocked(payloadSize, maxPerScope int64) {
+	if int64(initialRingCapacity)*entrySlotSize+payloadSize <= maxPerScope {
 		bp := ringBufPool.Get().(*[]bufferedEntry)
 		s.buf = *bp
+		s.ringBytes = int64(len(s.buf)) * entrySlotSize
 		s.head = 0
 		s.count = 0
+		return
 	}
-	if s.count == len(s.buf) {
-		newLen := len(s.buf) * 2
-		if newLen < initialRingCapacity {
-			newLen = initialRingCapacity
-		}
-		nb := make([]bufferedEntry, newLen)
-		for i := 0; i < s.count; i++ {
-			nb[i] = s.buf[(s.head+i)%len(s.buf)]
-			s.buf[(s.head+i)%len(s.buf)] = bufferedEntry{}
-		}
-		if len(s.buf) <= maxPooledRingCap {
-			old := s.buf
-			ringBufPool.Put(&old)
-		}
-		s.buf = nb
-		s.head = 0
+	maxSlots := int((maxPerScope - payloadSize) / entrySlotSize)
+	if maxSlots < 1 {
+		maxSlots = 1
 	}
-	idx := (s.head + s.count) % len(s.buf)
-	s.buf[idx] = e
-	s.count++
+	if maxSlots > initialRingCapacity {
+		maxSlots = initialRingCapacity
+	}
+	s.buf = make([]bufferedEntry, maxSlots)
+	s.ringBytes = int64(maxSlots) * entrySlotSize
+	s.head = 0
+	s.count = 0
+}
+
+func (s *Scope) tryGrowRingLocked(payloadSize, maxPerScope int64) bool {
+	curCap := len(s.buf)
+	nextCap := curCap * 2
+	if curCap < initialRingCapacity {
+		nextCap = initialRingCapacity
+		if int64(nextCap)*entrySlotSize+s.payloadBytes+payloadSize > maxPerScope {
+			nextCap = curCap + 1
+		}
+	}
+	if int64(nextCap)*entrySlotSize+s.payloadBytes+payloadSize > maxPerScope {
+		return false
+	}
+
+	var nb []bufferedEntry
+	if nextCap == initialRingCapacity {
+		bp := ringBufPool.Get().(*[]bufferedEntry)
+		nb = *bp
+	} else {
+		nb = make([]bufferedEntry, nextCap)
+	}
+
+	for i := 0; i < s.count; i++ {
+		idx := (s.head + i) % curCap
+		nb[i] = s.buf[idx]
+		s.buf[idx] = bufferedEntry{}
+	}
+	releaseRingSlice(s.buf)
+	s.buf = nb
+	s.head = 0
+	s.ringBytes = int64(len(nb)) * entrySlotSize
+	return true
+}
+
+func releaseRingSlice(b []bufferedEntry) {
+	if len(b) == initialRingCapacity {
+		ringBufPool.Put(&b)
+	}
 }
 
 func (s *Scope) popOldestLocked() bufferedEntry {
@@ -440,7 +580,8 @@ func (s *Scope) popOldestLocked() bufferedEntry {
 	if s.count == 0 {
 		s.head = 0
 	}
-	s.bytes -= e.size
+	s.payloadBytes -= e.size
+	s.bytes = s.ringBytes + s.payloadBytes
 	return e
 }
 
@@ -451,25 +592,26 @@ func (s *Scope) clearAndReleasePoolLocked() (droppedCount int, freedBytes int64)
 		idx := (s.head + i) % len(s.buf)
 		s.buf[idx] = bufferedEntry{}
 	}
-	if len(s.buf) >= initialRingCapacity && len(s.buf) <= maxPooledRingCap {
-		b := s.buf
-		ringBufPool.Put(&b)
-	}
+	releaseRingSlice(s.buf)
 	s.buf = nil
 	s.head = 0
 	s.count = 0
+	s.ringBytes = 0
+	s.payloadBytes = 0
 	s.bytes = 0
 	return droppedCount, freedBytes
 }
 
 func (s *Scope) drainAndReleasePoolLocked() ([]bufferedEntry, int64) {
+	freed := s.bytes
 	if s.count == 0 {
-		if len(s.buf) >= initialRingCapacity && len(s.buf) <= maxPooledRingCap {
-			b := s.buf
-			ringBufPool.Put(&b)
-		}
+		releaseRingSlice(s.buf)
 		s.buf = nil
-		return nil, 0
+		s.head = 0
+		s.ringBytes = 0
+		s.payloadBytes = 0
+		s.bytes = 0
+		return nil, freed
 	}
 	out := make([]bufferedEntry, s.count)
 	for i := 0; i < s.count; i++ {
@@ -477,14 +619,12 @@ func (s *Scope) drainAndReleasePoolLocked() ([]bufferedEntry, int64) {
 		out[i] = s.buf[idx]
 		s.buf[idx] = bufferedEntry{}
 	}
-	freed := s.bytes
-	if len(s.buf) >= initialRingCapacity && len(s.buf) <= maxPooledRingCap {
-		b := s.buf
-		ringBufPool.Put(&b)
-	}
+	releaseRingSlice(s.buf)
 	s.buf = nil
 	s.head = 0
 	s.count = 0
+	s.ringBytes = 0
+	s.payloadBytes = 0
 	s.bytes = 0
 	return out, freed
 }
@@ -493,6 +633,10 @@ func (s *Scope) drainAndReleasePoolLocked() ([]bufferedEntry, int64) {
 // flushes all buffered records in chronological order if triggered, or discards
 // the buffer and writes a single summary record if healthy.
 func (s *Scope) End(ctx context.Context, statusCode int) {
+	s.endWithSummaryAttr(ctx, statusCode, slog.Attr{})
+}
+
+func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSummaryAttr slog.Attr) {
 	st := s.state
 	now := st.now()
 	duration := now.Sub(s.startTime)
@@ -503,6 +647,7 @@ func (s *Scope) End(ctx context.Context, statusCode int) {
 		return
 	}
 	s.closed = true
+	st.unlinkScope(s)
 
 	if statusCode >= 500 && !s.triggered {
 		s.triggered = true
@@ -531,14 +676,13 @@ func (s *Scope) End(ctx context.Context, statusCode int) {
 	if freedBytes > 0 {
 		st.totalBytes.Add(-freedBytes)
 	}
-	st.unlinkScope(s)
 	st.activeScopes.Add(-1)
 
 	if triggered {
 		st.scopesFlushed.Add(1)
 		for i, e := range entries {
 			includeTruncMeta := truncated && i == 0
-			outRec := buildOutputRecord(e.rec, e.groups, e.attrs, s.meta.TraceID, reason, includeTruncMeta, droppedInScope)
+			outRec := e.recorder.buildOutputRecord(e.rec, s.meta.TraceID, reason, includeTruncMeta, droppedInScope)
 			_ = st.baseNext.Handle(ctx, outRec)
 		}
 		st.recordsFlushed.Add(uint64(len(entries)))
@@ -556,7 +700,9 @@ func (s *Scope) End(ctx context.Context, statusCode int) {
 			slog.Duration("duration", duration),
 			slog.Uint64("flightrec.dropped_records", droppedCount),
 		)
-		if statusCode > 0 {
+		if !extraSummaryAttr.Equal(slog.Attr{}) {
+			summary.AddAttrs(extraSummaryAttr)
+		} else if statusCode > 0 {
 			summary.AddAttrs(slog.Int("status", statusCode))
 		}
 		if s.meta.Method != "" {
@@ -569,17 +715,19 @@ func (s *Scope) End(ctx context.Context, statusCode int) {
 	}
 }
 
-func (st *recorderState) linkScope(sc *Scope) {
+func (st *recorderState) ensureLinked(sc *Scope) {
 	st.listMu.Lock()
-	sc.prev = st.newest
-	sc.next = nil
-	if st.newest != nil {
-		st.newest.next = sc
-	} else {
-		st.oldest = sc
+	if !sc.inList && !sc.closed {
+		sc.prev = st.newest
+		sc.next = nil
+		if st.newest != nil {
+			st.newest.next = sc
+		} else {
+			st.oldest = sc
+		}
+		st.newest = sc
+		sc.inList = true
 	}
-	st.newest = sc
-	sc.inList = true
 	st.listMu.Unlock()
 }
 
@@ -607,7 +755,7 @@ func (st *recorderState) enforceTotalCap(current *Scope) {
 	for st.totalBytes.Load() > st.opts.MaxTotal {
 		st.listMu.Lock()
 		victim := st.oldest
-		if victim == current {
+		if victim == current && victim.next != nil {
 			victim = victim.next
 		}
 		st.listMu.Unlock()
@@ -617,9 +765,12 @@ func (st *recorderState) enforceTotalCap(current *Scope) {
 		}
 
 		victim.mu.Lock()
-		if victim.closed || victim.count == 0 {
-			victim.mu.Unlock()
+		if victim.closed || victim.bytes == 0 {
 			st.unlinkScope(victim)
+			victim.mu.Unlock()
+			if victim == current {
+				return
+			}
 			continue
 		}
 		droppedInt, freed := victim.clearAndReleasePoolLocked()
@@ -628,9 +779,9 @@ func (st *recorderState) enforceTotalCap(current *Scope) {
 		victim.droppedInScope += dropped
 		alreadyEvicted := victim.evictedByTotalCap
 		victim.evictedByTotalCap = true
+		st.unlinkScope(victim)
 		victim.mu.Unlock()
 
-		st.unlinkScope(victim)
 		if freed > 0 {
 			st.totalBytes.Add(-freed)
 		}
@@ -640,10 +791,13 @@ func (st *recorderState) enforceTotalCap(current *Scope) {
 		if !alreadyEvicted {
 			st.scopesEvictedTotalCap.Add(1)
 		}
+		if victim == current {
+			return
+		}
 	}
 }
 
-func buildOutputRecord(rec slog.Record, groups []string, preAttrs []slog.Attr, traceID, flushReason string, truncated bool, droppedInScope uint64) slog.Record {
+func (r *Recorder) buildOutputRecord(rec slog.Record, traceID, flushReason string, truncated bool, droppedInScope uint64) slog.Record {
 	out := slog.NewRecord(rec.Time, rec.Level, rec.Message, rec.PC)
 	if traceID != "" {
 		out.AddAttrs(slog.String("flightrec.trace_id", traceID))
@@ -657,60 +811,145 @@ func buildOutputRecord(rec slog.Record, groups []string, preAttrs []slog.Attr, t
 			slog.Uint64("flightrec.dropped_records", droppedInScope),
 		)
 	}
-	if len(preAttrs) > 0 {
-		out.AddAttrs(preAttrs...)
+
+	if len(r.rootAttrs) > 0 {
+		out.AddAttrs(r.rootAttrs...)
 	}
-	if rec.NumAttrs() > 0 {
-		if len(groups) == 0 {
+
+	if len(r.frames) == 0 {
+		if rec.NumAttrs() > 0 {
 			rec.Attrs(func(a slog.Attr) bool {
+				a.Value = a.Value.Resolve()
+				if a.Equal(slog.Attr{}) {
+					return true
+				}
+				if a.Value.Kind() == slog.KindGroup {
+					sub := cleanAttrs(a.Value.Group())
+					if len(sub) == 0 {
+						return true
+					}
+					if a.Key == "" {
+						out.AddAttrs(sub...)
+						return true
+					}
+					a.Value = slog.GroupValue(sub...)
+				}
 				out.AddAttrs(a)
 				return true
 			})
-		} else {
-			recAttrs := make([]slog.Attr, 0, rec.NumAttrs())
-			rec.Attrs(func(a slog.Attr) bool {
-				recAttrs = append(recAttrs, a)
-				return true
-			})
-			out.AddAttrs(wrapAttrsInGroups(groups, recAttrs))
 		}
+		return out
+	}
+
+	var recAttrs []slog.Attr
+	if n := rec.NumAttrs(); n > 0 {
+		raw := make([]slog.Attr, 0, n)
+		rec.Attrs(func(a slog.Attr) bool {
+			raw = append(raw, a)
+			return true
+		})
+		recAttrs = cleanAttrs(raw)
+	}
+
+	inner := recAttrs
+	for i := len(r.frames) - 1; i >= 0; i-- {
+		f := r.frames[i]
+		if len(f.attrs) == 0 && len(inner) == 0 {
+			continue
+		}
+		combined := make([]slog.Attr, 0, len(f.attrs)+len(inner))
+		combined = append(combined, f.attrs...)
+		combined = append(combined, inner...)
+		inner = []slog.Attr{{Key: f.name, Value: slog.GroupValue(combined...)}}
+	}
+	if len(inner) > 0 {
+		out.AddAttrs(inner...)
 	}
 	return out
 }
 
-func wrapAttrsInGroups(groups []string, attrs []slog.Attr) slog.Attr {
-	anyAttrs := make([]any, len(attrs))
-	for i, a := range attrs {
-		anyAttrs[i] = a
+func cloneAndResolveRecord(rec slog.Record) slog.Record {
+	needsResolve := false
+	rec.Attrs(func(a slog.Attr) bool {
+		k := a.Value.Kind()
+		if k == slog.KindLogValuer || k == slog.KindGroup {
+			needsResolve = true
+			return false
+		}
+		return true
+	})
+	if !needsResolve {
+		return rec.Clone()
 	}
-	g := slog.Group(groups[len(groups)-1], anyAttrs...)
-	for i := len(groups) - 2; i >= 0; i-- {
-		g = slog.Group(groups[i], g)
+	out := slog.NewRecord(rec.Time, rec.Level, rec.Message, rec.PC)
+	raw := make([]slog.Attr, 0, rec.NumAttrs())
+	rec.Attrs(func(a slog.Attr) bool {
+		raw = append(raw, a)
+		return true
+	})
+	cleaned := cleanAttrs(raw)
+	if len(cleaned) > 0 {
+		out.AddAttrs(cleaned...)
 	}
-	return g
+	return out
 }
 
-func estimateRecordSize(rec *slog.Record, preAttrs []slog.Attr) int64 {
-	sz := baseRecordOverhead + int64(len(rec.Message))
-	for i := range preAttrs {
-		sz += estimateAttrSize(preAttrs[i])
+func cleanAttrs(attrs []slog.Attr) []slog.Attr {
+	if len(attrs) == 0 {
+		return nil
+	}
+	out := make([]slog.Attr, 0, len(attrs))
+	for _, a := range attrs {
+		a.Value = a.Value.Resolve()
+		if a.Equal(slog.Attr{}) {
+			continue
+		}
+		if a.Value.Kind() == slog.KindGroup {
+			sub := cleanAttrs(a.Value.Group())
+			if len(sub) == 0 {
+				continue
+			}
+			if a.Key == "" {
+				out = append(out, sub...)
+				continue
+			}
+			a.Value = slog.GroupValue(sub...)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func estimateRecordPayloadSize(rec *slog.Record, r *Recorder) int64 {
+	sz := int64(len(rec.Message))
+	if n := rec.NumAttrs(); n > 5 {
+		sz += int64(n) * int64(unsafe.Sizeof(slog.Attr{}))
+	}
+	for i := range r.rootAttrs {
+		sz += estimateAttrPayloadSize(r.rootAttrs[i])
+	}
+	for i := range r.frames {
+		sz += int64(len(r.frames[i].name))
+		for j := range r.frames[i].attrs {
+			sz += estimateAttrPayloadSize(r.frames[i].attrs[j])
+		}
 	}
 	rec.Attrs(func(a slog.Attr) bool {
-		sz += estimateAttrSize(a)
+		sz += estimateAttrPayloadSize(a)
 		return true
 	})
 	return sz
 }
 
-func estimateAttrSize(a slog.Attr) int64 {
-	sz := int64(16 + len(a.Key))
-	v := a.Value.Resolve()
+func estimateAttrPayloadSize(a slog.Attr) int64 {
+	sz := int64(len(a.Key))
+	v := a.Value
 	switch v.Kind() {
 	case slog.KindString:
 		sz += int64(len(v.String()))
 	case slog.KindGroup:
 		for _, ga := range v.Group() {
-			sz += estimateAttrSize(ga)
+			sz += int64(unsafe.Sizeof(slog.Attr{})) + estimateAttrPayloadSize(ga)
 		}
 	case slog.KindAny:
 		if s, ok := v.Any().(string); ok {
@@ -720,8 +959,6 @@ func estimateAttrSize(a slog.Attr) int64 {
 		} else {
 			sz += 16
 		}
-	default:
-		sz += 8
 	}
 	return sz
 }
@@ -744,12 +981,7 @@ func httpStatusReason(code int) string {
 var rngPool = sync.Pool{
 	New: func() any {
 		var seed [32]byte
-		if _, err := rand.Read(seed[:]); err != nil {
-			binary.LittleEndian.PutUint64(seed[:8], uint64(time.Now().UnixNano()))
-			if n, err2 := rand.Int(rand.Reader, big.NewInt(1<<62)); err2 == nil {
-				binary.LittleEndian.PutUint64(seed[8:16], n.Uint64())
-			}
-		}
+		_, _ = rand.Read(seed[:])
 		return mrand.NewChaCha8(seed)
 	},
 }

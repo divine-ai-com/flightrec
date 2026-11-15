@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	totalRequests   = 1000
-	logsPerRequest  = 20
-	failEveryN      = 100 // 1% error rate (10 failed requests out of 1,000)
+	totalRequests  = 1000
+	logsPerRequest = 20
+	failEveryN     = 100 // 1% error rate (10 failed requests out of 1,000)
 )
 
 func runWorkload(handler http.Handler) {

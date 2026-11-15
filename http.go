@@ -5,6 +5,7 @@ package flightrec
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -16,8 +17,8 @@ import (
 // The scope is keyed by the request's trace ID (extracted from W3C traceparent,
 // X-Trace-Id, or X-Request-Id headers, or generated when absent). The buffer
 // is flushed if an error log is recorded, the response status is 5xx, the
-// handler panics, the duration exceeds SlowAfter, or Flush(ctx, reason) is
-// called explicitly.
+// handler panics (except http.ErrAbortHandler), the duration exceeds SlowAfter,
+// or Flush(ctx, reason) is called explicitly.
 func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -27,18 +28,19 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 				Method:  r.Method,
 				Path:    r.URL.Path,
 			})
-			rw := &statusResponseWriter{
-				ResponseWriter: w,
-				status:         http.StatusOK,
-			}
+			rw, sw := wrapResponseWriter(w)
 
 			defer func() {
 				if p := recover(); p != nil {
+					if p == http.ErrAbortHandler {
+						sc.End(ctx, sw.status)
+						panic(p)
+					}
 					sc.Trigger("panic")
 					sc.End(ctx, http.StatusInternalServerError)
 					panic(p)
 				}
-				sc.End(ctx, rw.status)
+				sc.End(ctx, sw.status)
 			}()
 
 			next.ServeHTTP(rw, r.WithContext(ctx))
@@ -106,26 +108,98 @@ func (w *statusResponseWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-func (w *statusResponseWriter) Flush() {
+func (w *statusResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *statusResponseWriter) flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
-func (w *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+func (w *statusResponseWriter) hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
 		return hj.Hijack()
 	}
 	return nil, nil, http.ErrNotSupported
 }
 
-func (w *statusResponseWriter) Push(target string, opts *http.PushOptions) error {
-	if p, ok := w.ResponseWriter.(http.Pusher); ok {
-		return p.Push(target, opts)
+func (w *statusResponseWriter) readFrom(r io.Reader) (int64, error) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
 	}
-	return http.ErrNotSupported
+	return w.ResponseWriter.(io.ReaderFrom).ReadFrom(r)
 }
 
-func (w *statusResponseWriter) Unwrap() http.ResponseWriter {
-	return w.ResponseWriter
+type rwFlusher struct{ statusResponseWriter }
+
+func (w *rwFlusher) Flush() { w.flush() }
+
+type rwHijacker struct{ statusResponseWriter }
+
+func (w *rwHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) { return w.hijack() }
+
+type rwReaderFrom struct{ statusResponseWriter }
+
+func (w *rwReaderFrom) ReadFrom(r io.Reader) (int64, error) { return w.readFrom(r) }
+
+type rwFlusherHijacker struct{ statusResponseWriter }
+
+func (w *rwFlusherHijacker) Flush()                                       { w.flush() }
+func (w *rwFlusherHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) { return w.hijack() }
+
+type rwFlusherReaderFrom struct{ statusResponseWriter }
+
+func (w *rwFlusherReaderFrom) Flush()                              { w.flush() }
+func (w *rwFlusherReaderFrom) ReadFrom(r io.Reader) (int64, error) { return w.readFrom(r) }
+
+type rwHijackerReaderFrom struct{ statusResponseWriter }
+
+func (w *rwHijackerReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, error) { return w.hijack() }
+func (w *rwHijackerReaderFrom) ReadFrom(r io.Reader) (int64, error)          { return w.readFrom(r) }
+
+type rwFlusherHijackerReaderFrom struct{ statusResponseWriter }
+
+func (w *rwFlusherHijackerReaderFrom) Flush() { w.flush() }
+func (w *rwFlusherHijackerReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijack()
+}
+func (w *rwFlusherHijackerReaderFrom) ReadFrom(r io.Reader) (int64, error) { return w.readFrom(r) }
+
+func wrapResponseWriter(w http.ResponseWriter) (http.ResponseWriter, *statusResponseWriter) {
+	base := statusResponseWriter{
+		ResponseWriter: w,
+		status:         http.StatusOK,
+	}
+	_, hasFlusher := w.(http.Flusher)
+	_, hasHijacker := w.(http.Hijacker)
+	_, hasReaderFrom := w.(io.ReaderFrom)
+
+	switch {
+	case hasFlusher && hasHijacker && hasReaderFrom:
+		v := &rwFlusherHijackerReaderFrom{base}
+		return v, &v.statusResponseWriter
+	case hasFlusher && hasHijacker:
+		v := &rwFlusherHijacker{base}
+		return v, &v.statusResponseWriter
+	case hasFlusher && hasReaderFrom:
+		v := &rwFlusherReaderFrom{base}
+		return v, &v.statusResponseWriter
+	case hasHijacker && hasReaderFrom:
+		v := &rwHijackerReaderFrom{base}
+		return v, &v.statusResponseWriter
+	case hasFlusher:
+		v := &rwFlusher{base}
+		return v, &v.statusResponseWriter
+	case hasHijacker:
+		v := &rwHijacker{base}
+		return v, &v.statusResponseWriter
+	case hasReaderFrom:
+		v := &rwReaderFrom{base}
+		return v, &v.statusResponseWriter
+	default:
+		v := &base
+		return v, v
+	}
 }

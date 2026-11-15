@@ -88,7 +88,7 @@ It is not the right tool when:
 go get github.com/divine-ai-com/flightrec
 ```
 
-Requires Go 1.24 or later.
+Requires Go 1.26 or later.
 
 ## Quick start
 
@@ -106,10 +106,10 @@ import (
 
 func main() {
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(os.Stdout, nil), // your existing handler
-		PassLevel:   slog.LevelWarn,                      // written immediately
-		BufferLevel: slog.LevelDebug,                     // buffered per request
-		SlowAfter:   2 * time.Second,                     // slow requests are kept too
+		Next:          slog.NewJSONHandler(os.Stdout, nil), // your existing handler
+		PassLeveler:   slog.LevelWarn,                      // written immediately
+		BufferLeveler: slog.LevelDebug,                     // buffered per request
+		SlowAfter:     2 * time.Second,                     // slow requests are kept too
 	})
 	slog.SetDefault(slog.New(rec))
 
@@ -163,24 +163,29 @@ func processJob(ctx context.Context, rec *flightrec.Recorder, jobID string) (err
 
 ### gRPC
 
-`InvokeGRPCUnary` adapts to a unary server interceptor without adding gRPC as a dependency of this module.
+Use the `github.com/divine-ai-com/flightrec/grpcflightrec` submodule for ready-to-use unary and stream server interceptors that extract trace IDs from incoming gRPC metadata (`traceparent`, `x-trace-id`, `x-request-id`):
 
 ```go
-grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	return flightrec.InvokeGRPCUnary(ctx, rec, info.FullMethod, nil, req, handler)
-})
+import "github.com/divine-ai-com/flightrec/grpcflightrec"
+
+srv := grpc.NewServer(
+	grpc.UnaryInterceptor(grpcflightrec.UnaryServerInterceptor(rec)),
+	grpc.StreamInterceptor(grpcflightrec.StreamServerInterceptor(rec)),
+)
 ```
+
+Or use `flightrec.InvokeGRPCUnary` and `flightrec.InvokeGRPCStream` directly from the zero-dependency root module.
 
 ### Choose what is buffered
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `PassLevel` | `slog.LevelWarn` | Records at or above this level are written immediately |
-| `BufferLevel` | `slog.LevelDebug` | Records at or above this level, and below `PassLevel`, are buffered |
+| `PassLeveler` | `slog.LevelWarn` | Records at or above this level inside a scope are written immediately |
+| `BufferLeveler` | `slog.LevelDebug` | Records at or above this level, and below `PassLeveler`, are buffered |
 | `SlowAfter` | off | Requests that take this long or longer are kept |
 | `DisableHealthySummary` | `false` | Turns off the summary line for healthy requests |
 
-Set both levels explicitly, as in the quick start.
+Set both levels explicitly, as in the quick start. Outside a scope, records are delegated to `Next.Enabled` and `Next.Handle` unchanged; inside a scope, flushed records bypass `Next`'s level so debug detail for failed requests is never lost (see [Level Filtering](https://pkg.go.dev/github.com/divine-ai-com/flightrec#hdr-Level_Filtering)).
 
 ### Limit memory
 
@@ -211,14 +216,14 @@ slog.Info("flightrec",
 | `flightrec.trace_id` | every record in a request | The request's trace ID |
 | `flightrec.flush_reason` | flushed records | Why the request was kept (see below) |
 | `flightrec.truncated`, `flightrec.dropped_records` | first flushed record, if records were lost | The buffer hit a memory limit |
-| `duration`, `status`, `method`, `path`, `flightrec.dropped_records` | the summary line | Outcome of a healthy request |
+| `duration`, `status` (or `grpc.code`), `method`, `path`, `flightrec.dropped_records` | the summary line | Outcome of a healthy request |
 
 | Trigger | `flightrec.flush_reason` |
 | --- | --- |
 | A record at Error level or above was logged | `error_log` |
 | Response status 500 or above | `http_500`, `http_502`, `http_503`, `http_504`, `http_5xx` |
-| The gRPC handler returned an error | `grpc_error` |
-| The handler panicked (the panic is re-raised after the flush) | `panic` |
+| A gRPC server fault (`Unknown`, `DeadlineExceeded`, `Unimplemented`, `Internal`, `Unavailable`, `DataLoss`) or non-gRPC error (client codes like `NotFound`, `InvalidArgument`, `Canceled` do not flush; `DeadlineExceeded` does flush) | `grpc_error` |
+| The handler panicked, except `http.ErrAbortHandler` (the panic is re-raised after the flush) | `panic` |
 | The request took `SlowAfter` or longer | `slow_request` |
 | The code called `flightrec.Flush(ctx, reason)` | the reason given |
 
@@ -270,9 +275,7 @@ The demo is synthetic: every record is at Debug level, so the 92.5% reduction fo
 - **One service.** A failure does not yet flush the buffers of upstream or downstream services. Planned for v0.3.
 - **A hard kill loses the buffer.** Panics are flushed. `SIGKILL` and out-of-memory kills are not, until v0.4.
 - **The context must be passed.** `slog.Debug(...)` without a context has no request to attach to and is handled as a log outside a request.
-- **Values are captured by reference.** A pointer logged with `slog.Any` shows its state at flush time.
-
-Known defects in v0.1.0 are tracked in the [v0.1.1 milestone](https://github.com/divine-ai-com/flightrec/milestone/1).
+- **Values are captured by reference.** Attributes implementing `slog.LogValuer` are resolved when buffered at log time, but a raw pointer, map, or slice logged with `slog.Any` shows its state at flush time.
 
 ## Stability
 

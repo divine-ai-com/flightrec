@@ -2,21 +2,21 @@
 
 ## Goals
 
-1. **Zero network/serialization cost for healthy debug logs:** Do not format JSON or write to `io.Writer` for `DEBUG`/`INFO` records unless a request triggers.
-2. **Strict memory bounds:** Never allow a slow loris or traffic spike to exhaust heap memory (`MaxPerScope` + `MaxTotal`).
+1. **Skip JSON formatting and I/O for healthy debug logs:** Do not serialize or write `DEBUG`/`INFO` records to `io.Writer` unless a request triggers.
+2. **Strict memory bounds:** Enforce both per-scope (`MaxPerScope`) and process-wide (`MaxTotal`) byte caps, accounting for both ring-buffer slot capacity and record payloads.
 3. **Zero external dependencies:** Rely strictly on the Go standard library (`log/slog`, `net/http`, `sync/atomic`).
 
 ## Request Scope Lifecycle
 
-1. **StartScope:** `HTTPMiddleware` extracts a trace ID from W3C `traceparent`, `X-Trace-Id`, or `X-Request-Id` (or generates a 128-bit random hex ID via a pooled `math/rand/v2.ChaCha8` generator). It attaches a `*Scope` to `r.Context()` and links the scope to the tail of the recorder's active-scope doubly-linked list.
+1. **StartScope:** `HTTPMiddleware` extracts a trace ID from W3C `traceparent`, `X-Trace-Id`, or `X-Request-Id` (or generates a 128-bit random hex ID via a pooled `math/rand/v2.ChaCha8` generator). It attaches a `*Scope` to `r.Context()`. The underlying `[]bufferedEntry` ring buffer is allocated lazily on the first buffered record so idle scopes do not pre-allocate ring memory.
 2. **Handle:**
-   - **No Scope in `ctx`:** Passes straight through to `Next`.
-   - **`level >= PassLevel` (`WARN`, `ERROR`):** Emitted immediately to `Next` with `flightrec.trace_id` attached. If `level >= slog.LevelError`, the scope is marked triggered (`reason = "error_log"`).
-   - **`BufferLevel <= level < PassLevel` (`DEBUG`, `INFO`):** Clones the `slog.Record` into a pooled circular buffer slice (`[]bufferedEntry`) inside the `Scope`.
+   - **No Scope in `ctx`:** Filtered by `PassLeveler`; records `>= PassLeveler` are emitted immediately to `Next.Handle`.
+   - **`level >= PassLeveler` (`WARN`, `ERROR`):** Emitted immediately to `Next.Handle` with `flightrec.trace_id` attached. If `level >= slog.LevelError`, the scope is marked triggered (`reason = "error_log"`).
+   - **`BufferLeveler <= level < PassLeveler` (`DEBUG`, `INFO`):** Resolves any `slog.LogValuer` attributes, clones the `slog.Record` into the scope's circular buffer slice (`[]bufferedEntry`), and links the scope into the eviction list. If the scope has already ended, the late record is passed through to `Next.Handle` and counted in `RecordsPassedThrough`.
 3. **Memory Enforcement:**
-   - **Per-Scope (`MaxPerScope`):** If `scope.bytes + recordSize > MaxPerScope`, the scope pops its oldest records from the ring buffer head, marks `flightrec.truncated = true`, and increments `RecordsDroppedPerScopeCap`.
-   - **Process-Wide (`MaxTotal`):** `totalBytes` is tracked via an `atomic.Int64`. Only when `totalBytes > MaxTotal` does the recorder acquire `listMu` to evict the oldest active scopes from the head of the doubly-linked list, incrementing `ScopesEvictedTotalCap` and `RecordsDroppedTotalCap`.
+   - **Per-Scope (`MaxPerScope`):** `scope.bytes` tracks the allocated ring-buffer slot capacity (`len(buf) * sizeof(bufferedEntry)`) plus attribute and message payloads. When a new record would exceed `MaxPerScope`, the scope pops its oldest records from the ring buffer head, marks `flightrec.truncated = true`, and increments `RecordsDroppedPerScopeCap`.
+   - **Process-Wide (`MaxTotal`):** `totalBytes` is tracked via an `atomic.Int64`. When `totalBytes > MaxTotal`, the recorder acquires `listMu` to evict the oldest non-empty active scopes from the head of the doubly-linked list, incrementing `ScopesEvictedTotalCap` and `RecordsDroppedTotalCap`. If an evicted scope later buffers new records, it is re-linked to the tail of the eviction list so `MaxTotal` remains enforced across long-lived requests and streams.
 4. **End:**
-   - Checks HTTP status (`>= 500`) and elapsed duration (`>= SlowAfter`).
-   - **If triggered:** Drains the ring buffer, returns the backing slice to `sync.Pool`, and emits all buffered records in original chronological order with their original timestamps, `WithAttrs`/`WithGroup` hierarchy, `flightrec.trace_id`, and `flightrec.flush_reason`.
-   - **If healthy:** Clears and returns the backing slice to `sync.Pool` without formatting any buffered records, and emits one summary record (`msg="request completed"`, `flightrec.dropped_records`, `duration`, `status`).
+   - Checks HTTP status (`>= 500`), gRPC server-fault codes, and elapsed duration (`>= SlowAfter`).
+   - **If triggered:** Drains the ring buffer, returns the backing slice to `sync.Pool`, and emits all buffered records in original chronological order with their original timestamps, single nested `WithAttrs`/`WithGroup` tree, `flightrec.trace_id`, and `flightrec.flush_reason`.
+   - **If healthy:** Clears and returns the backing slice to `sync.Pool` without formatting any buffered records, and emits one summary record (`msg="request completed"`, `flightrec.dropped_records`, `duration`, `status` or `grpc.code`).
