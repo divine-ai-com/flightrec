@@ -10,6 +10,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 - `traceparent` values are accepted only when valid as the W3C Trace Context specification defines them: lowercase hex, non-zero trace and parent IDs, no version `ff`, and exactly four fields for version `00`. Other values are skipped like an invalid `X-Request-Id` (#84).
 - `otelflightrec.SpanProcessor` no longer triggers on an error status or exception event of a client or producer span that records the remote's answer as a client error: `rpc.grpc.status_code` other than the server-fault codes, or `http.response.status_code` below 500. Instrumentation such as otelgrpc marks client spans as errors for answers like `NotFound`, so a 404 flushed every service in the trace, against the documented gRPC rules. Outbound errors without such an answer (connection failures, timeouts, database and third-party calls) still trigger (#85).
 
+### Fixed
+- A failed request whose buffered records were all dropped (evicted by `MaxTotal`, or a single record larger than `MaxPerScope`) writes one `buffered records dropped` line with `flightrec.truncated` and `flightrec.dropped_records`. Before, it wrote nothing, and the loss showed only in `Stats` (#86).
+
 ## [v0.4.0] - 2026-11-15
 
 Crash recovery: the debug logs of requests in flight when the process is killed (`SIGKILL`, an out-of-memory kill, a grace period that ran out) are recovered on the next start (proposal 0002).
