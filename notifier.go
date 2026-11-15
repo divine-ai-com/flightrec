@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
 
 // Notifier carries flush notices between processes, so that a failure in one
@@ -291,7 +293,7 @@ func (h *notifierHub) localTrigger(traceID, reason string) {
 	}
 	// Generated IDs are announced too: services forward them to the services
 	// they call (X-Request-Id, gRPC metadata), which then know them.
-	if !validTraceID(traceID) {
+	if !traceid.Valid(traceID) {
 		return
 	}
 	value, _ := MarkerValue(reason)
@@ -425,7 +427,7 @@ func (h *notifierHub) receive(msg []byte) {
 		return
 	}
 	for _, n := range m.Notices {
-		if !validTraceID(n.TraceID) || !ValidMarker(n.Reason) {
+		if !traceid.Valid(n.TraceID) || !ValidMarker(n.Reason) {
 			h.st.notifierRejected.Add(1)
 			continue
 		}
