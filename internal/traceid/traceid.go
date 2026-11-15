@@ -83,6 +83,7 @@ var rngPool = sync.Pool{
 	},
 }
 
+// Generate returns a random 32-hex-digit trace ID.
 func Generate() string {
 	ch := rngPool.Get().(*mrand.ChaCha8)
 	var b [16]byte

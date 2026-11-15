@@ -82,9 +82,9 @@ func (sn *Copier) Attr(a slog.Attr) slog.Attr {
 	return a
 }
 
-// MaxValue bounds one copied slog.Any value, in each of its two
+// maxValue bounds one copied slog.Any value, in each of its two
 // renderings. Larger values are replaced by a short marker.
-const MaxValue = 64 << 10
+const maxValue = 64 << 10
 
 // Truncated replaces a value too large to copy.
 const Truncated = "!TRUNCATED: value larger than 64 KB"
@@ -97,10 +97,10 @@ const Truncated = "!TRUNCATED: value larger than 64 KB"
 func Of(v any) slog.Value {
 	raw := renderJSON(v)
 	text := renderText(v)
-	if len(raw) > MaxValue {
+	if len(raw) > maxValue {
 		raw, _ = json.Marshal(Truncated)
 	}
-	if len(text) > MaxValue {
+	if len(text) > maxValue {
 		text = Truncated
 	}
 	return slog.AnyValue(Value{raw: raw, text: text})

@@ -21,7 +21,7 @@ func TestSnapshotBudget(t *testing.T) {
 		big[strconv.Itoa(i)] = strings.Repeat("x", 30)
 	}
 	if v := Of(big).Any().(Value); string(v.raw) != `"`+Truncated+`"` || v.text != Truncated {
-		t.Errorf("value over %d bytes not truncated: %d/%d bytes", MaxValue, len(v.raw), len(v.text))
+		t.Errorf("value over %d bytes not truncated: %d/%d bytes", maxValue, len(v.raw), len(v.text))
 	}
 	sn := Copier{Budget: 100}
 	sn.Attr(slog.Any("a", map[string]int{"k": 1}))
