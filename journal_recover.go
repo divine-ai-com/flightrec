@@ -77,6 +77,7 @@ type recoveredScope struct {
 	id      uint64
 	start   scopeStart
 	started bool // the start entry survived
+	dropped int  // records too large to journal
 	records []journalRecord
 }
 
@@ -152,6 +153,8 @@ func (st *recorderState) recoverJournal(path string) {
 					return
 				}
 				sc.start, sc.started = s, true
+			case journal.KindDropped:
+				sc.dropped++
 			case journal.KindRecord:
 				jr, err := decodeJournalRecord(e.Payload)
 				if err != nil {
@@ -207,8 +210,9 @@ func (st *recorderState) recoverScope(sc *recoveredScope, host string, processSt
 			tc.TraceID = scopeTrace
 		}
 		out := r.buildOutputRecord(rec, traceID, tc.SpanIDHex(), flushReasonCrashRecovery, false, 0)
-		if !sc.started && i == 0 {
-			// The oldest records of the scope were overwritten.
+		if i == 0 && (!sc.started || sc.dropped > 0) {
+			// The oldest records were overwritten, or some were too large
+			// to journal.
 			out.AddAttrs(slog.Bool("flightrec.truncated", true))
 		}
 		out.AddAttrs(recovered...)
@@ -235,8 +239,12 @@ func (st *recorderState) recoverScope(sc *recoveredScope, host string, processSt
 	}
 	if sc.started {
 		summary.AddAttrs(slog.Time("start", sc.start.start))
-	} else {
+	}
+	if !sc.started || sc.dropped > 0 {
 		summary.AddAttrs(slog.Bool("flightrec.truncated", true))
+	}
+	if sc.dropped > 0 {
+		summary.AddAttrs(slog.Int("flightrec.dropped_records", sc.dropped))
 	}
 	summary.AddAttrs(recovered...)
 	ctx := context.Background()

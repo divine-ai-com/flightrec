@@ -487,3 +487,35 @@ func FuzzRecoverJournal(f *testing.F) {
 		_ = stop()
 	})
 }
+
+// TestRecoverMarksRecordsTooLargeToJournal checks that a record too large for
+// a journal entry leaves the recovered request marked truncated.
+func TestRecoverMarksRecordsTooLargeToJournal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j")
+	r := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug, MaxPerScope: 1 << 20})
+	if _, err := r.StartJournal(path, WithJournalSize(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, _ := StartScope(context.Background(), r, ScopeMeta{TraceID: "t-big"})
+	log := slog.New(r)
+	log.DebugContext(ctx, "small", "seq", 0)
+	log.DebugContext(ctx, "huge", "blob", strings.Repeat("x", 70<<10))
+	log.DebugContext(ctx, "small", "seq", 2)
+	crash(t, r)
+
+	var out lineBuffer
+	if _, err := recoverInto(t, path, slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})); err != nil {
+		t.Fatal(err)
+	}
+	lines := out.lines(t)
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 2 records and a summary: %v", len(lines), lines)
+	}
+	if lines[0]["flightrec.truncated"] != true {
+		t.Errorf("first recovered record not marked truncated: %v", lines[0])
+	}
+	sum := lines[2]
+	if sum["flightrec.truncated"] != true || sum["flightrec.dropped_records"] != float64(1) || sum["flightrec.recovered_records"] != float64(2) {
+		t.Errorf("summary %v", sum)
+	}
+}

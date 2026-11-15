@@ -12,6 +12,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ### Fixed
 - A failed request whose buffered records were all dropped (evicted by `MaxTotal`, or a single record larger than `MaxPerScope`) writes one `buffered records dropped` line with `flightrec.truncated` and `flightrec.dropped_records`. Before, it wrote nothing, and the loss showed only in `Stats` (#86).
+- A record too large for a journal entry (about 64 KB encoded) now leaves a marker, so its request is recovered marked `flightrec.truncated`, with `flightrec.dropped_records` on the summary line. Before, the record was left out silently (#87).
 
 ## [v0.4.0] - 2026-11-15
 

@@ -185,7 +185,11 @@ func (st *recorderState) journalRecord(sc *Scope, r *Recorder, rec slog.Record, 
 	}
 	bp := journalScratch.Get().(*[]byte)
 	b := appendJournalRecord((*bp)[:0], r, rec, tc)
-	if js.file.Append(sc.jid, journal.KindRecord, sc.jid, b) {
+	if len(b) > journal.MaxPayload {
+		// Too large for an entry: leave a marker, so recovery can say the
+		// scope lost a record. The writer counts the record as dropped.
+		js.file.Append(sc.jid, journal.KindDropped, sc.jid, nil)
+	} else if js.file.Append(sc.jid, journal.KindRecord, sc.jid, b) {
 		js.records.Add(1)
 	}
 	putScratch(bp, b)
