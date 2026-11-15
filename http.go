@@ -6,11 +6,12 @@ package flightrec
 import (
 	"bufio"
 	"errors"
-	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"io"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
 
 // FlushHeader is the response header a triggered scope sets so that callers

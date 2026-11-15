@@ -7,10 +7,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"github.com/divine-ai-com/flightrec/internal/snapshot"
 	"log/slog"
 	"math"
 	"time"
+
+	"github.com/divine-ai-com/flightrec/internal/snapshot"
 )
 
 // Journal payload encoding. Private: it may change in any release, and the

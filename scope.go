@@ -5,10 +5,11 @@ package flightrec
 
 import (
 	"context"
-	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
 
 type scopeContextKey struct{}

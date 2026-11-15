@@ -8,11 +8,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/divine-ai-com/flightrec/internal/traceid"
 	mrand "math/rand/v2"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
 
 // Notifier carries flush notices between processes, so that a failure in one

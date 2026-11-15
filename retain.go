@@ -6,10 +6,11 @@ package flightrec
 import (
 	"container/list"
 	"context"
-	"github.com/divine-ai-com/flightrec/internal/snapshot"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/divine-ai-com/flightrec/internal/snapshot"
 )
 
 // maxRetainedPerTrace limits how many retained scopes one trace ID can hold,

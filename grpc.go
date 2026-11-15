@@ -6,10 +6,11 @@ package flightrec
 import (
 	"context"
 	"errors"
-	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"log/slog"
 	"reflect"
 	"strings"
+
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
 
 // GRPCMetadataExtractor extracts a trace ID from a gRPC request context

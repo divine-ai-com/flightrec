@@ -6,10 +6,11 @@ package flightrec
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
 
 func TestNotifierSignatureEnvelope(t *testing.T) {

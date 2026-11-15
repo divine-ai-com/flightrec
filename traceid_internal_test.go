@@ -5,13 +5,14 @@ package flightrec
 
 import (
 	"context"
-	"github.com/divine-ai-com/flightrec/internal/traceid"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/divine-ai-com/flightrec/internal/traceid"
 )
 
 func TestExtractHTTPTraceIDLimits(t *testing.T) {
