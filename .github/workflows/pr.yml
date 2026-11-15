@@ -1,0 +1,70 @@
+name: PR
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: pr title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@2252a14e810aa9b85c2d560bd7070c802206ecf6 # v6.1.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            docs
+            test
+            build
+            ci
+            chore
+          scopes: |
+            core
+            http
+            grpc
+            otel
+            deps
+          requireScope: false
+          subjectPattern: ^[a-z].*[^.]$
+          subjectPatternError: |
+            The subject "{subject}" must start with a lower-case letter and must not end with a period.
+
+  changelog:
+    name: changelog
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Require an Unreleased entry and protect released sections
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ! git diff --name-only "$BASE"...HEAD | grep -qx CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::Add an entry under '## [Unreleased]' or apply the skip-changelog label."
+            exit 1
+          fi
+          # Lines removed or changed below the first released heading mean a released section was edited.
+          first_release=$(git show "$BASE":CHANGELOG.md | grep -n '^## \[v' | head -1 | cut -d: -f1)
+          if git diff -U0 "$BASE"...HEAD -- CHANGELOG.md | grep -E '^@@ -[0-9]+' | while read -r _ old _; do
+               start=${old#-}; start=${start%%,*}
+               [ "$start" -ge "$first_release" ] && echo edited
+             done | grep -q edited; then
+            echo "::error file=CHANGELOG.md::Released sections must not be edited. Add changes under '## [Unreleased]'."
+            exit 1
+          fi

@@ -10,11 +10,12 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/divine-ai-com/flightrec"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/divine-ai-com/flightrec"
 )
 
 const (

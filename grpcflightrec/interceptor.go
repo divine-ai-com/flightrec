@@ -9,9 +9,10 @@ package grpcflightrec
 import (
 	"context"
 
-	"github.com/divine-ai-com/flightrec"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+
+	"github.com/divine-ai-com/flightrec"
 )
 
 // UnaryServerInterceptor returns a grpc.UnaryServerInterceptor that opens a

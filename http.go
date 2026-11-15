@@ -5,6 +5,7 @@ package flightrec
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -32,7 +33,7 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 
 			defer func() {
 				if p := recover(); p != nil {
-					if p == http.ErrAbortHandler {
+					if err, ok := p.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 						sc.End(ctx, sw.status)
 						panic(p)
 					}
@@ -74,7 +75,7 @@ func parseW3CTraceparent(tp string) string {
 	allZero := true
 	for i := 0; i < len(tid); i++ {
 		c := tid[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return ""
 		}
 		if c != '0' {
