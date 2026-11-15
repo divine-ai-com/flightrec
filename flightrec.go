@@ -22,6 +22,8 @@ const (
 	DefaultMaxPerScope int64 = 256 << 10
 	// DefaultMaxTotal is the default process-wide buffer cap (64 MB).
 	DefaultMaxTotal int64 = 64 << 20
+	// DefaultMaxRetained is the default cap on retained scope bytes (16 MB).
+	DefaultMaxRetained int64 = 16 << 20
 
 	initialRingCapacity = 24
 	maxPooledRingCap    = 512
@@ -101,6 +103,18 @@ type Options struct {
 	// outside your system, such as a public API or an edge gateway.
 	DisableFlushMarker bool
 
+	// Retain keeps the buffer of a healthy scope for this long after the scope
+	// ends, so a failure reported later for the same trace ID can still write
+	// it with Recorder.FlushTrace (or, with a notifier, from another service).
+	// Zero disables retention. See also MaxRetained.
+	Retain time.Duration
+
+	// MaxRetained caps the bytes held by retained scopes, separately from
+	// MaxTotal. When it is reached the oldest retained scopes are dropped.
+	// Defaults to DefaultMaxRetained (16 MB) when Retain is set and this is
+	// <= 0.
+	MaxRetained int64
+
 	// DisableHealthySummary disables writing the single summary log line when
 	// a healthy (untriggered) scope completes.
 	DisableHealthySummary bool
@@ -148,6 +162,22 @@ type Stats struct {
 	// MarkersRejected counts FlushHeader values from responses that were not
 	// a built-in reason and were ignored.
 	MarkersRejected uint64
+
+	// RetainedScopes and RetainedBytes are the healthy scopes currently held
+	// for Options.Retain and the bytes they use.
+	RetainedScopes int64
+	RetainedBytes  int64
+	// RetainedOldestAge is the age of the oldest retained scope, which is the
+	// effective retention window under the current load.
+	RetainedOldestAge time.Duration
+	// RetainedFlushed counts retained scopes written by FlushTrace.
+	RetainedFlushed uint64
+	// RetainedExpired counts retained scopes dropped after Options.Retain.
+	RetainedExpired uint64
+	// RetainedEvicted counts retained scopes dropped early, to stay within
+	// MaxRetained or the per-trace limit, including scopes larger than
+	// MaxRetained on their own, which are dropped instead of retained.
+	RetainedEvicted uint64
 }
 
 type groupFrame struct {
@@ -192,6 +222,11 @@ type recorderState struct {
 	flushMarkersMissed        atomic.Uint64
 	downstreamTriggers        atomic.Uint64
 	markersRejected           atomic.Uint64
+	retainedFlushed           atomic.Uint64
+	retainedExpired           atomic.Uint64
+	retainedEvicted           atomic.Uint64
+
+	retained retainedSet
 
 	listMu sync.Mutex
 	oldest *Scope
@@ -266,6 +301,9 @@ func New(opts Options) *Recorder {
 	if opts.MaxPerScope > opts.MaxTotal {
 		opts.MaxPerScope = opts.MaxTotal
 	}
+	if opts.Retain > 0 && opts.MaxRetained <= 0 {
+		opts.MaxRetained = DefaultMaxRetained
+	}
 	nowFn := opts.Now
 	if nowFn == nil {
 		nowFn = time.Now
@@ -287,7 +325,10 @@ func New(opts Options) *Recorder {
 // Stats returns a snapshot of the recorder's current and cumulative metrics.
 func (r *Recorder) Stats() Stats {
 	st := r.state
-	return Stats{
+	// Gauges first: computing them expires old retained scopes, which the
+	// counters below must include.
+	retainedScopes, retainedBytes, retainedOldest := st.retainedGauges()
+	stats := Stats{
 		ActiveScopes:              st.activeScopes.Load(),
 		BufferedBytes:             st.totalBytes.Load(),
 		ScopesStarted:             st.scopesStarted.Load(),
@@ -304,7 +345,12 @@ func (r *Recorder) Stats() Stats {
 		FlushMarkersMissed:        st.flushMarkersMissed.Load(),
 		DownstreamTriggers:        st.downstreamTriggers.Load(),
 		MarkersRejected:           st.markersRejected.Load(),
+		RetainedFlushed:           st.retainedFlushed.Load(),
+		RetainedExpired:           st.retainedExpired.Load(),
+		RetainedEvicted:           st.retainedEvicted.Load(),
 	}
+	stats.RetainedScopes, stats.RetainedBytes, stats.RetainedOldestAge = retainedScopes, retainedBytes, retainedOldest
+	return stats
 }
 
 // Enabled implements slog.Handler.
@@ -788,7 +834,8 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	var entries []bufferedEntry
 	var freedBytes int64
 	var healthyDropped int
-	if triggered {
+	retain := !triggered && st.opts.Retain > 0 && s.count > 0
+	if triggered || retain {
 		entries, freedBytes = s.drainAndReleasePoolLocked()
 	} else {
 		healthyDropped, freedBytes = s.clearAndReleasePoolLocked()
@@ -804,24 +851,22 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 
 	if triggered {
 		st.scopesFlushed.Add(1)
-		for i, e := range entries {
-			includeTruncMeta := truncated && i == 0
-			tc := e.traceCtx
-			if !tc.HasTraceID() && hasScopeTraceBytes {
-				tc.TraceID = scopeTraceBytes
-			}
-			outRec := e.recorder.buildOutputRecord(e.rec, traceID, tc.SpanIDHex(), reason, includeTruncMeta, droppedInScope)
-			recCtx := st.injectTraceContext(ctx, tc)
-			_ = st.baseNext.Handle(recCtx, outRec)
-		}
-		st.recordsFlushed.Add(uint64(len(entries)))
+		st.writeFlushed(ctx, entries, traceID, reason, truncated, droppedInScope)
 		st.notifyScopeEnd(s, traceID, true, reason)
 		return
 	}
 
 	droppedCount := uint64(healthyDropped) + droppedInScope
-	st.scopesHealthyDropped.Add(1)
-	st.recordsHealthyDropped.Add(uint64(healthyDropped))
+	retainedCount := len(entries)
+	if retain {
+		// Retained records are not written now. They count as healthy drops
+		// only if the retained scope expires or is evicted.
+		droppedCount = droppedInScope
+		st.retain(traceID, entries, truncated, droppedInScope, now)
+	} else {
+		st.scopesHealthyDropped.Add(1)
+		st.recordsHealthyDropped.Add(uint64(healthyDropped))
+	}
 
 	if !st.opts.DisableHealthySummary {
 		summary := slog.NewRecord(now, slog.LevelInfo, "request completed", 0)
@@ -840,6 +885,9 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 		}
 		if path != "" {
 			summary.AddAttrs(slog.String("path", path))
+		}
+		if retain {
+			summary.AddAttrs(slog.Int("flightrec.retained_records", retainedCount))
 		}
 		summaryCtx := ctx
 		if tc := st.extractTraceContext(ctx); !tc.HasTraceID() && hasScopeTraceBytes {

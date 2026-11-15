@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/divine-ai-com/flightrec"
 )
@@ -191,3 +192,68 @@ func BenchmarkFlightRec_OutOfScope_WithAttrs(b *testing.B) {
 		logger.WarnContext(ctx, "background tick", "iter", i)
 	}
 }
+
+// BenchmarkFlightRec_BufferedAndRetained measures a healthy request with 20
+// buffered debug logs kept for Options.Retain instead of discarded.
+func BenchmarkFlightRec_BufferedAndRetained(b *testing.B) {
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+		Retain:        30 * time.Second,
+	})
+	logger := slog.New(rec)
+	baseCtx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		ctx, sc := flightrec.StartScope(baseCtx, rec, flightrec.ScopeMeta{
+			TraceID: "0123456789abcdef0123456789abcdef",
+			Method:  "GET",
+			Path:    "/api/orders",
+		})
+		for j := 0; j < logsPerRequest; j++ {
+			logger.DebugContext(ctx, "db query executed", "table", "orders", "rows", j, "cached", true)
+		}
+		sc.End(ctx, 200)
+	}
+}
+
+type benchOrder struct {
+	ID    int    `json:"id"`
+	State string `json:"state"`
+	Total int    `json:"total"`
+}
+
+// benchAnyValues runs healthy requests whose 20 log calls each carry a
+// struct passed with slog.Any, with or without retention.
+func benchAnyValues(b *testing.B, retain time.Duration) {
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+		Retain:        retain,
+	})
+	logger := slog.New(rec)
+	o := &benchOrder{ID: 42, State: "pending", Total: 1999}
+	baseCtx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		ctx, sc := flightrec.StartScope(baseCtx, rec, flightrec.ScopeMeta{TraceID: "0123456789abcdef0123456789abcdef"})
+		for j := 0; j < logsPerRequest; j++ {
+			logger.DebugContext(ctx, "order step", "step", j, "order", o)
+		}
+		sc.End(ctx, 200)
+	}
+}
+
+// BenchmarkFlightRec_AnyValues_Dropped is the discarded baseline for
+// BenchmarkFlightRec_AnyValues_Retained.
+func BenchmarkFlightRec_AnyValues_Dropped(b *testing.B) { benchAnyValues(b, 0) }
+
+// BenchmarkFlightRec_AnyValues_Retained includes copying each slog.Any value
+// when the scope is retained.
+func BenchmarkFlightRec_AnyValues_Retained(b *testing.B) { benchAnyValues(b, 30*time.Second) }
