@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"net/http"
 	"testing"
 	"time"
 
@@ -55,6 +56,12 @@ func TestLogHandlerConvertsEveryValueKind(t *testing.T) {
 	}
 	if g, ok := a["g"].(map[string]any); !ok || g["x"] != int64(1) {
 		t.Errorf("group = %#v", a["g"])
+	}
+	if b, ok := a["bytes"].([]byte); !ok || string(b) != "raw" {
+		t.Errorf("bytes = %#v, want the byte slice", a["bytes"])
+	}
+	if v, present := a["nil"]; present && v != nil {
+		t.Errorf("nil = %#v, want an empty value", v)
 	}
 }
 
@@ -161,6 +168,18 @@ func TestSpanRingGrowsForLargeTraces(t *testing.T) {
 }
 
 func TestScopeFailingAtEndFlushesItsTrace(t *testing.T) {
+	for _, tc := range []struct {
+		status    int
+		wantSpans int
+	}{
+		{503, 2}, // failed at End: the whole trace is exported
+		{200, 1}, // healthy: only the root, under the default policy
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) { endTraceWithStatus(t, tc.status, tc.wantSpans) })
+	}
+}
+
+func endTraceWithStatus(t *testing.T, status, wantSpans int) {
 	exp := tracetest.NewInMemoryExporter()
 	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
 	sp := otelflightrec.NewSpanProcessor(otelflightrec.SpanProcessorOptions{Next: sdktrace.NewSimpleSpanProcessor(exp), Recorder: rec})
@@ -179,13 +198,36 @@ func TestScopeFailingAtEndFlushesItsTrace(t *testing.T) {
 	)
 	child.AddEvent("rows", trace.WithAttributes(attribute.Int("n", 3)))
 	child.End()
-	root.End()       // the local root ends first, as with otelhttp wrapping flightrec
-	sc.End(ctx, 503) // the status decides at End that the request failed
+	root.End()          // the local root ends first, as with otelhttp wrapping flightrec
+	sc.End(ctx, status) // the status decides at End whether the request failed
 
-	if got := len(exp.GetSpans()); got != 2 {
-		t.Fatalf("exported %d spans, want root and child after a 503", got)
+	spans := exp.GetSpans()
+	if len(spans) != wantSpans {
+		t.Fatalf("status %d: exported %d spans, want %d", status, len(spans), wantSpans)
 	}
-	if st := sp.Stats(); st.TracesFlushed != 1 || st.ActiveTraces != 0 {
-		t.Errorf("stats %+v", st)
+	if sp.Stats().ActiveTraces != 0 {
+		t.Errorf("trace not released: %+v", sp.Stats())
+	}
+	if wantSpans < 2 {
+		return
+	}
+	var got tracetest.SpanStub
+	for _, s := range spans {
+		if s.Name == "db.query" {
+			got = s
+		}
+	}
+	attrs := map[string]string{}
+	for _, kv := range got.Attributes {
+		attrs[string(kv.Key)] = kv.Value.Emit()
+	}
+	if attrs["tables"] != `["orders","items"]` || attrs["ids"] != "[1,2]" || attrs["cached"] != "false" {
+		t.Errorf("child attributes = %v", attrs)
+	}
+	if len(got.Events) != 1 || got.Events[0].Name != "rows" {
+		t.Errorf("child events = %+v", got.Events)
+	}
+	if len(got.Links) != 1 || got.Links[0].SpanContext.SpanID() != root.SpanContext().SpanID() {
+		t.Errorf("child links = %+v", got.Links)
 	}
 }
