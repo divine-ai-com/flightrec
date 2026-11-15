@@ -302,9 +302,9 @@ func TestNotifierPublishesForwardedGeneratedTraceIDs(t *testing.T) {
 	sc.End(ctx, 502)
 
 	eventually(t, "b to flush the retained scope", func() bool { return b.rec.Stats().RemoteFlushes == 1 })
-	if got := c.rec.Stats().NotifierPublished; got != 1 {
-		t.Errorf("NotifierPublished = %d for a generated trace ID, want 1", got)
-	}
+	// The publisher counts after Publish returns, which can be after b
+	// received the notice.
+	eventually(t, "c to count its publish", func() bool { return c.rec.Stats().NotifierPublished == 1 })
 	if !strings.Contains(b.out.String(), "remote:http_502") {
 		t.Errorf("b output lacks remote:http_502:\n%s", b.out.String())
 	}
