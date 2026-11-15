@@ -136,7 +136,7 @@ When a request fails deep in a call chain, every service that handled it can kee
 
 ```go
 client := &http.Client{Transport: flightrec.NewTransport(http.DefaultTransport)}
-stop := rec.StartNotifier(ctx, notifier) // with Options.Retain set
+stop := rec.StartNotifier(ctx, notifier, flightrec.WithSigningKey(key)) // with Options.Retain set
 ```
 
 See [docs/cross-service.md](docs/cross-service.md) and [`examples/cross-service`](examples/cross-service).
@@ -173,7 +173,7 @@ Use it when your service handles requests (HTTP, gRPC, queue jobs) and logs with
 - You need every line kept, for audit: log those at or above the pass level, or outside flightrec.
 - Your log calls do not pass a `context.Context`: only `slog.DebugContext(ctx, ...)` style calls can be tied to a request.
 
-Other limits are listed in [docs/reference.md](docs/reference.md#limits).
+Other limits are listed in [docs/reference.md](docs/reference.md#limits). Before exposing a service to clients outside your system, read [Running flightrec safely](docs/security.md).
 
 ## How it compares
 
@@ -193,6 +193,7 @@ flightrec follows semantic versioning. Before 1.0, a minor release may change th
 - [API reference](https://pkg.go.dev/github.com/divine-ai-com/flightrec)
 - [Reference: options, trace IDs, log attributes, flush reasons, limits](docs/reference.md)
 - [Keep logs across services](docs/cross-service.md) and [Survive a hard kill](docs/crash-recovery.md)
+- [Running flightrec safely](docs/security.md): public-facing services, notifier authentication, sensitive data
 - [Benchmarks](docs/benchmarks.md), [design](docs/design.md), [troubleshooting](docs/troubleshooting.md)
 
 ## Contributing

@@ -22,7 +22,7 @@ n, err := redisnotifier.New(redisClient, redisnotifier.WithChannel("flightrec:pr
 if err != nil {
 	return err
 }
-stop := rec.StartNotifier(ctx, n)
+stop := rec.StartNotifier(ctx, n, flightrec.WithSigningKey(key)) // key: 32+ random bytes shared by every service
 defer stop()
 ```
 
@@ -40,3 +40,5 @@ Limits to plan for:
 On a service that answers clients outside your system, set `DisableFlushMarker: true` and `IgnoreRequestTraceIDs: true`, so you neither tell outsiders about your failures nor let them choose the trace IDs your logs are grouped by. With OpenTelemetry middleware in front, also mark it public (`otelhttp.WithPublicEndpoint()`), or the client's `traceparent` still becomes the span's trace, and so flightrec's.
 
 [`examples/cross-service`](../examples/cross-service) runs three services through both cases, in one process or with Docker Compose and Redis.
+
+Anyone who can publish on the notifier channel can trigger flushes in every service, so sign messages with `WithSigningKey` and restrict the channel's credentials; see [Running flightrec safely](security.md#notifier-channel).

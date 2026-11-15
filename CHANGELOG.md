@@ -4,6 +4,10 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Security
+- `StartJournal` refuses a lock file (`path.lock`) that is not a private regular file of the current user with one link, instead of locking a file another user planted.
+- New guide, [Running flightrec safely](docs/security.md): settings for public-facing services, notifier authentication and channel permissions, sensitive data, where to put the journal, and resource limits.
+
 ### Changed
 - With OpenTelemetry middleware inside `HTTPMiddleware`, a scope keyed by a request header (`traceparent`, `X-Trace-Id`, `X-Request-Id`) takes the server span's trace ID when the span starts, as a generated ID already did, so logs and spans agree in either middleware order. The header ID stays an alias: notifier notices for it still reach the scope (and its child scopes), failures are announced under both IDs, the per-trace cap of retained scopes applies to both, and flushed records and the summary line carry it as `flightrec.request_id`. The adoption is journaled, so recovered records carry the same IDs (#96).
 

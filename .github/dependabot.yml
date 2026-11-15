@@ -9,6 +9,8 @@ updates:
       - /otelflightrec
       - /notifier/redisnotifier
       - /notifier/natsnotifier
+      - /examples/cross-service
+      - /benchmarks/otelexport
     schedule:
       interval: weekly
     open-pull-requests-limit: 0

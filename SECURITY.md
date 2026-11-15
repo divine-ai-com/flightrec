@@ -2,15 +2,9 @@
 
 ## Supported Versions
 
-Only the latest minor release of each module receives security fixes.
+The latest minor release of each module receives security fixes; see the [releases](https://github.com/divine-ai-com/flightrec/releases) for the current versions. Before 1.0, fixes are not backported to earlier minor releases.
 
-| Module | Supported |
-| --- | --- |
-| `github.com/divine-ai-com/flightrec` | `v0.3.x` |
-| `github.com/divine-ai-com/flightrec/grpcflightrec` | `v0.3.x` |
-| `github.com/divine-ai-com/flightrec/otelflightrec` | `v0.2.x` |
-| `github.com/divine-ai-com/flightrec/notifier/redisnotifier` | `v0.3.x` |
-| `github.com/divine-ai-com/flightrec/notifier/natsnotifier` | `v0.3.x` |
+For guidance on running flightrec safely (public-facing services, notifier authentication, sensitive data, resource limits), see [docs/security.md](docs/security.md).
 
 ## Reporting a Vulnerability
 
