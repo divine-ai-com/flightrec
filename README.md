@@ -307,7 +307,7 @@ slog.Info("flightrec",
 
 ## Performance
 
-Measured on v0.1.0 with Go 1.27.4, linux/amd64, Intel Xeon 2.20 GHz, 4 vCPU, median of 5 runs. Reproduce with:
+Measured for v0.3.0 by the [Benchmarks workflow](https://github.com/divine-ai-com/flightrec/actions/runs/43714183457) on a GitHub Actions runner (AMD EPYC 9V74, 4 vCPU, linux/amd64, Go 1.27.4): 10 alternating runs, benchstat medians. Absolute numbers depend on the machine; the ratios are what carry over. Reproduce locally with:
 
 ```bash
 go test -bench=. -benchmem -run='^$' . && go run ./cmd/demo
@@ -317,17 +317,20 @@ Cost of one request that makes 20 log calls with 3 attributes each:
 
 | Path | Time per log call | Allocations per request |
 | --- | ---: | ---: |
-| Plain slog, debug logging off | 16 ns | 0 |
-| **flightrec, healthy request (buffered, then discarded)** | **790 ns** | **4** |
-| Plain slog, debug logging on (JSON to `io.Discard`) | 1,260 ns | 0 |
-| flightrec, records at Warn or above (written immediately) | 1,650 ns | 4 |
-| flightrec, failed request (buffered, then written) | 2,170 ns | 4 |
+| Plain slog, debug logging off | 7 ns | 0 |
+| **flightrec, healthy request (buffered, then discarded)** | **459 ns** | **4** |
+| flightrec, healthy request kept for `Retain` | 545 ns | 8 |
+| Plain slog, debug logging on (JSON to `io.Discard`) | 675 ns | 0 |
+| flightrec, records at Warn or above (written immediately) | 955 ns | 4 |
+| flightrec, failed request (buffered, then written) | 1,195 ns | 4 |
 
 How to read this:
 
-- Against always-on debug logging, a healthy request costs about 37% less CPU and writes one line.
-- Against debug logging turned off, buffering is not free. Each buffered call costs about 790 ns, most of it the timestamp and caller lookup that `slog` performs for any enabled record. That is the price of having the detail when a request fails.
+- Against always-on debug logging, a healthy request costs about 32% less CPU and writes one line.
+- Against debug logging turned off, buffering is not free. Each buffered call costs about 460 ns, most of it the timestamp and caller lookup that `slog` performs for any enabled record. That is the price of having the detail when a request fails.
 - Calls with more than 5 attributes allocate once per call, as they do in `slog` itself (24 allocations per request against 20 for plain slog, measured with a child logger and 6 attributes).
+- `Retain` copies `slog.Any` values when a request ends. With one struct pointer per call (logged 20 times, encoded once) a retained request takes 13.3 µs against 8.6 µs discarded; many distinct pointers per request cost more.
+- With a notifier attached, starting and ending a scope costs about 120 ns more under parallel load (759 ns against 641 ns per minimal request).
 
 Log volume in the bundled demo, 1,000 requests with 1% failing and 20 debug records each:
 
