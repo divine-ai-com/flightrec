@@ -10,7 +10,7 @@
 <p align="center">
   <img src="docs/media/walkthrough.svg" alt="flightrec walkthrough: the problem, how per-request buffering works, cross-service flush, crash recovery and OpenTelemetry spans" width="100%">
   <br>
-  <sub>A 106-second walkthrough that loops. Also available as a <a href="https://github.com/divine-ai-com/flightrec/releases/download/v0.5.0/walkthrough.webm">video file</a>.</sub>
+  <sub>A 106-second walkthrough that loops. Also available as a <a href="https://github.com/divine-ai-com/flightrec/releases/download/v0.5.0/walkthrough.webm">video file</a>; generated from <a href="docs/media/src">docs/media/src</a>.</sub>
 </p>
 
 flightrec is a handler for Go's `log/slog` that works like an aircraft flight recorder. It records every request's debug and info logs in memory and writes them out only when that request fails or runs slowly. A healthy request leaves one summary line.
@@ -166,7 +166,9 @@ Cost of one request that makes 20 log calls with 3 attributes each, on a GitHub 
 
 Against always-on debug logging, a healthy request costs about 32% less CPU and writes one line; in the bundled demo, flightrec writes 92.5% fewer lines. An [end-to-end test](docs/e2e-report.md) ran three services for 10 minutes at 300 req/s with flat memory. Details, methodology and the tracing numbers: [docs/benchmarks.md](docs/benchmarks.md).
 
-## When not to use it
+## When to use it
+
+Use it when your service handles requests (HTTP, gRPC, queue jobs) and logs with `slog`, and you either run with debug logging off and miss the detail during incidents, or run with it on and pay mostly for healthy traffic. It is not the right tool when:
 
 - You need every line kept, for audit: log those at or above the pass level, or outside flightrec.
 - Your log calls do not pass a `context.Context`: only `slog.DebugContext(ctx, ...)` style calls can be tied to a request.

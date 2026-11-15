@@ -37,6 +37,7 @@ Requires the two latest Go releases (currently 1.26 and 1.27).
 make test    # every module, with the race detector
 make cover   # coverage floors for core and otelflightrec
 make lint    # needs golangci-lint v2.15.0
+make bench
 make demo
 ```
 

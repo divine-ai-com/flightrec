@@ -54,6 +54,7 @@ slog.Info("flightrec",
 | `flightrec.recovered`, `flightrec.recovered_host`, `flightrec.recovered_process_start` | records recovered after a crash | Written by the next start of a killed process (`StartJournal`) |
 | `flightrec.recovered_scope` | records recovered for a request with no trace ID | Groups the lines of that request |
 | `duration`, `status` (or `grpc.code`), `method`, `path`, `flightrec.dropped_records` | the summary line | Outcome of a healthy request |
+| `flightrec.dropped_spans` | the exported root span of a healthy trace (`otelflightrec`, `HealthyExportRootOnly`) | Child spans dropped because the trace was healthy |
 | `flightrec.retained_records` | the summary line, with `Retain` | Records kept for a later remote flush instead of being dropped |
 
 | Trigger | `flightrec.flush_reason` |
