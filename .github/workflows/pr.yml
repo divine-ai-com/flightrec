@@ -37,6 +37,7 @@ jobs:
             http
             grpc
             otel
+            notifier
             deps
           requireScope: false
           subjectPattern: ^[a-z].*[^.]$
