@@ -49,18 +49,18 @@ const (
 	notifierBackoffMax     = 30 * time.Second
 	notifierMessageVersion = 1
 	notifierMaxMessageSize = 64 << 10
+	notifierMaxSignedSize  = notifierMaxMessageSize*4/3 + 256 // base64 and the envelope
 )
 
-// NotifierOption configures StartNotifier. No options are defined yet; the
-// parameter exists so limits can be made configurable without changing the
-// signature.
+// NotifierOption configures StartNotifier.
 type NotifierOption interface {
 	applyNotifier(*notifierConfig)
 }
 
-// notifierConfig holds settings from NotifierOption values. It is empty until
-// the first option is added.
-type notifierConfig struct{}
+// notifierConfig holds settings from NotifierOption values.
+type notifierConfig struct {
+	keys [][]byte // signing key first, then keys accepted for verification
+}
 
 // notice is one flushed trace in a notifier message.
 type notice struct {
@@ -98,6 +98,7 @@ type notifierHub struct {
 	st     *recorderState
 	n      Notifier
 	origin string
+	keys   [][]byte // WithSigningKey: signing key first
 
 	outbox  chan notice
 	inbox   chan notice
@@ -151,6 +152,7 @@ func (r *Recorder) StartNotifier(ctx context.Context, n Notifier, opts ...Notifi
 		st:        st,
 		n:         n,
 		origin:    newOriginID(),
+		keys:      cfg.keys,
 		outbox:    make(chan notice, notifierQueueSize),
 		inbox:     make(chan notice, notifierQueueSize),
 		publish:   newTokenBucket(notifierPublishRate, notifierPublishBurst, st.now),
@@ -351,6 +353,9 @@ func (h *notifierHub) runPublisher(ctx context.Context) {
 			h.st.notifierPublishErrors.Add(uint64(len(batch)))
 			continue
 		}
+		if len(h.keys) > 0 {
+			msg = signNotifierMessage(h.keys[0], msg, h.st.now())
+		}
 		pctx, cancel := context.WithTimeout(ctx, notifierPublishTimeout)
 		err = h.n.Publish(pctx, msg)
 		cancel()
@@ -395,6 +400,18 @@ func (h *notifierHub) runSubscriber(ctx context.Context) {
 // receive decodes a message from the Notifier and queues its notices. It
 // runs on the backend's goroutine, so it never blocks.
 func (h *notifierHub) receive(msg []byte) {
+	if len(msg) > notifierMaxSignedSize {
+		h.st.notifierRejected.Add(1)
+		return
+	}
+	if len(h.keys) > 0 {
+		payload, ok := openNotifierMessage(h.keys, msg, h.st.now())
+		if !ok {
+			h.st.notifierRejected.Add(1)
+			return
+		}
+		msg = payload
+	}
 	if len(msg) > notifierMaxMessageSize {
 		h.st.notifierRejected.Add(1)
 		return
