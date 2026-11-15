@@ -10,7 +10,7 @@
 <p align="center">
   <img src="docs/media/walkthrough.svg" alt="flightrec walkthrough: the problem, how per-request buffering works, cross-service flush, crash recovery and OpenTelemetry spans" width="100%">
   <br>
-  <sub>A 106-second walkthrough that loops. Also available as a <a href="docs/media/walkthrough.webm">video file</a>.</sub>
+  <sub>A 106-second walkthrough that loops. Also available as a <a href="docs/media/walkthrough.webm">video file</a>; sources in <a href="docs/media/src">docs/media/src</a>.</sub>
 </p>
 
 flightrec is a handler for Go's `log/slog` that works like an aircraft flight recorder. It records every request's debug and info logs in memory and writes them out only when that request fails or runs slowly. A healthy request leaves one summary line.
