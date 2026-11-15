@@ -82,7 +82,7 @@ def problem(d, dur):
 
 
 def adopt(d, dur):
-    background(d, "Adopt It in Three Lines", "Existing log calls stay as they are", bg=False)
+    background(d, "Adopt It in Three Changes", "Existing log calls stay as they are", bg=False)
     lines = [
         ("rec := flightrec.New(flightrec.Options{", "#e2e8f0", True),
         ("    Next:          slog.NewJSONHandler(os.Stdout, nil), // your handler", "#94a3b8", False),
@@ -133,7 +133,7 @@ def outro(d, dur):
     d.add(f'<g class="{d.show(1.0)}" filter="url(#soft)"><rect x="300" y="310" width="680" height="70" rx="14" fill="{C["term"]}" stroke="{C["green"]}" stroke-width="3"/></g>')
     text(d, 640, 354, "go get github.com/divine-ai-com/flightrec", 24, C["lime"], weight="700", cls=d.show(1.2), mono=True)
     text(d, 640, 440, "github.com/divine-ai-com/flightrec", 24, "#e2e8f0", weight="600", cls=d.show(2.0))
-    text(d, 640, 480, "Apache-2.0 · Go 1.26+ · Linux, macOS, Windows", 18, "#94a3b8", cls=d.show(2.4))
+    text(d, 640, 480, "Apache-2.0 · Go 1.26+ · journal on Linux, macOS and the BSDs", 18, "#94a3b8", cls=d.show(2.4))
 
 
 SCENES = [
@@ -153,6 +153,7 @@ def build():
     total = sum(s for s, _ in SCENES)
     d = Doc("flightrec walkthrough", "What flightrec solves and how: per-request debug log buffering, triggers, "
             "cross-service flush, crash recovery and OpenTelemetry spans.", loop=float(total))
+    d.still = 7 + 12 + 10.6  # the failed request in "How flightrec works"
     defs_common(d)
     background(d)
     t = 0.0

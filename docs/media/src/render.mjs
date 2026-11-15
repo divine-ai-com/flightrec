@@ -5,7 +5,7 @@
 //   node render.mjs file.svg video out.webm fps seconds     -> VP9 webm
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { writeFileSync } from "node:fs";
 
@@ -56,12 +56,13 @@ const send = (method, params = {}) =>
 const W = 1280, H = 720;
 await send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile: false });
 await send("Page.enable");
-// Inline the SVG in a page next to it, so its CSS animations can be stepped.
+// Inline the SVG in a temporary page, so its CSS animations can be stepped.
 const { readFileSync } = await import("node:fs");
 const svg = readFileSync(file, "utf8");
-writeFileSync(path.join(path.dirname(path.resolve(file)), "_frame.html"),
+const framePage = path.join(tmpdir(), `flightrec-frame-${process.pid}.html`);
+writeFileSync(framePage,
   `<!doctype html><html><body style="margin:0;background:#090d16;overflow:hidden">${svg.replace("<svg ", '<svg style="display:block;width:1280px;height:720px" ')}</body></html>`);
-await send("Page.navigate", { url: "file://" + path.join(path.dirname(path.resolve(file)), "_frame.html") });
+await send("Page.navigate", { url: "file://" + framePage });
 await new Promise((r) => setTimeout(r, 800));
 
 async function seek(t) {
@@ -75,7 +76,13 @@ async function shot(fmt = "png") {
   return Buffer.from(r.data, "base64");
 }
 
-if (mode === "stills") {
+if (mode === "reduced") {
+  // What a viewer who prefers reduced motion sees: no seeking, the CSS
+  // media query alone picks the frame.
+  await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+  await new Promise((r) => setTimeout(r, 300));
+  writeFileSync(`${out}.png`, await shot("png"));
+} else if (mode === "stills") {
   for (const t of rest.map(Number)) {
     await seek(t);
     writeFileSync(`${out}_${t}.png`, await shot("png"));
@@ -98,4 +105,5 @@ if (mode === "stills") {
 }
 ws.close();
 proc.kill();
+(await import("node:fs")).rmSync(framePage, { force: true });
 process.exit(0);

@@ -43,6 +43,7 @@ class Doc:
         self.defs, self.css, self.body = [], [], []
         self._n = 0
         self.offset = 0.0  # added to every animation time, for composing scenes
+        self.still = loop * 0.75  # frame shown when the viewer prefers reduced motion
 
     def uid(self, p="a"):
         self._n += 1
@@ -87,7 +88,7 @@ class Doc:
         style = (
             f"text{{font-family:{FONT}}} .mono{{font-family:{MONO}}} "
             ".pop,.g{transform-box:fill-box;transform-origin:center} "
-            "@media (prefers-reduced-motion:reduce){*{animation-duration:0s!important}}"
+            f"@media (prefers-reduced-motion:reduce){{*{{animation-play-state:paused!important;animation-delay:-{self.still:.2f}s!important}}}}"
         )
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {self.w} {self.h}" width="{self.w}" height="{self.h}" role="img" aria-labelledby="t d">'

@@ -4,10 +4,15 @@ import sys
 from kit import *  # noqa: F401,F403
 
 
+# Frames shown when the viewer prefers reduced motion.
+STILLS = {"How flightrec works": 10.6, "Cross-service flush": 10.0, "Crash recovery": 11.5, "OpenTelemetry spans": 8.0}
+
+
 def start(d, title, desc, loop, heading, subheading):
     """Creates a standalone diagram, or draws into a composed walkthrough."""
     if d is None:
         d = Doc(title, desc, loop=loop)
+        d.still = STILLS.get(title, loop * 0.75)
         defs_common(d)
         background(d, heading, subheading)
     else:
@@ -138,8 +143,9 @@ def cross_service(loop=14.0, d=None):
     # header bubbling back (synchronous)
     arrow(d, f"M{xs[2]-156} 290 L{xs[1]+156} 290", C["orange"], "arr")
     arrow(d, f"M{xs[1]-156} 290 L{xs[0]+156} 290", C["orange"], "arr")
-    text(d, 850, 320, "Flightrec-Flush: http_503", 13, C["orange"], weight="700", mono=True)
-    text(d, 430, 320, "Flightrec-Flush: http_503", 13, C["orange"], weight="700", mono=True)
+    for x in (430, 850):
+        text(d, x, 316, "Flightrec-Flush:", 12, C["orange"], weight="700", mono=True)
+        text(d, x, 332, "http_503", 12, C["orange"], weight="700", mono=True)
     mover(d, f"M{xs[2]-156} 290 L{xs[1]+156} 290", 3.0, 0.9, C["orange"], r=7, label="header")
     pill(d, xs[1], 440, "downstream:http_503", C["orange"], cls=d.pop(4.0, 13.4), size=15)
     mover(d, f"M{xs[1]-156} 290 L{xs[0]+156} 290", 4.3, 0.9, C["orange"], r=7, label="header")
@@ -154,7 +160,7 @@ def cross_service(loop=14.0, d=None):
     mover(d, f"M{xs[2]} 470 C{xs[2]} 560 1000 580 944 580", 6.6, 1.0, C["violet"], r=7, label="publish")
     arrow(d, f"M336 580 C{xs[0]} 580 {xs[0]} 520 {xs[0]} 474", C["violet"], "arr")
     mover(d, f"M336 580 C{xs[0]} 580 {xs[0]} 520 {xs[0]} 474", 7.9, 1.0, C["violet"], r=7, label="remote")
-    text(d, 640, 680, "Retained buffers flush with reason remote:<reason>; generated trace IDs are never announced", 14, "#94a3b8")
+    text(d, 640, 680, "Retained buffers flush with reason remote:<reason>; every notice is rate limited and validated", 14, "#94a3b8")
     return d
 
 
