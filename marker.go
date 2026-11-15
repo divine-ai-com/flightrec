@@ -5,24 +5,29 @@ package flightrec
 
 import "context"
 
-// FlushMarker returns the flush marker value to send on this scope's
-// response, and true, if the scope is triggered and Options.DisableFlushMarker
-// is not set. It counts the marker in Stats.FlushMarkersSent, so call it only
-// when the value will actually be sent.
+// SendFlushMarker sends this scope's flush marker if the scope is triggered
+// and Options.DisableFlushMarker is not set: it calls send with the marker
+// value (a built-in reason, see MarkerValue) and reports whether a marker was
+// sent. A nil error from send counts in Stats.FlushMarkersSent; an error
+// counts in Stats.FlushMarkersMissed. An untriggered scope calls nothing.
 //
-// HTTPMiddleware uses it for FlushHeader. Integrations for other protocols,
-// such as grpcflightrec, use it for their own response metadata.
-func (s *Scope) FlushMarker() (string, bool) {
+// HTTPMiddleware uses it to set FlushHeader. Integrations for other
+// protocols, such as grpcflightrec, call it where they set response metadata.
+func (s *Scope) SendFlushMarker(send func(value string) error) bool {
 	if s == nil || s.state == nil || s.state.opts.DisableFlushMarker {
-		return "", false
+		return false
 	}
 	triggered, reason := s.TriggerState()
 	if !triggered {
-		return "", false
+		return false
 	}
 	value, _ := MarkerValue(reason)
+	if err := send(value); err != nil {
+		s.state.flushMarkersMissed.Add(1)
+		return false
+	}
 	s.state.flushMarkersSent.Add(1)
-	return value, true
+	return true
 }
 
 // ReceiveMarker applies the flush marker values read from a response to the
@@ -33,14 +38,16 @@ func (s *Scope) FlushMarker() (string, bool) {
 // whether the scope was triggered. Without a scope in ctx, or with no values,
 // it does nothing.
 //
-// NewTransport uses it for FlushHeader. Integrations for other protocols use
-// it for the marker in their response metadata.
+// It takes a context rather than a Scope because the receiving side, such as
+// an http.RoundTripper, has only the request context. NewTransport uses it
+// for FlushHeader. Integrations for other protocols use it for the marker in
+// their response metadata.
 func ReceiveMarker(ctx context.Context, values []string) bool {
 	if len(values) == 0 {
 		return false
 	}
 	sc := scopeFromContext(ctx)
-	if sc == nil {
+	if sc == nil || sc.state == nil {
 		return false
 	}
 	if len(values) != 1 || !ValidMarker(values[0]) {
