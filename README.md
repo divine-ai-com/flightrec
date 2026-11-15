@@ -7,6 +7,12 @@
 [![Release](https://img.shields.io/github/v/release/divine-ai-com/flightrec?sort=semver)](https://github.com/divine-ai-com/flightrec/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src="docs/media/walkthrough.svg" alt="flightrec walkthrough: the problem, how per-request buffering works, cross-service flush, crash recovery and OpenTelemetry spans" width="100%">
+  <br>
+  <sub>A 106-second walkthrough that loops. Also available as a <a href="docs/media/walkthrough.webm">video file</a>.</sub>
+</p>
+
 flightrec is a handler for Go's `log/slog` that works like an aircraft flight recorder. It records every request's debug and info logs in memory and writes them out only when that request fails or runs slowly. A healthy request leaves one summary line.
 
 ```jsonc
@@ -37,13 +43,7 @@ flightrec removes the choice. Healthy requests cost one line. Failed requests co
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A[Request starts] --> B[Debug and info records<br/>go to an in-memory buffer]
-    B --> C{Request ends.<br/>Did it fail or run slowly?}
-    C -- no --> D[Buffer discarded.<br/>One summary line written.]
-    C -- yes --> E[Whole buffer written,<br/>in order, with original timestamps]
-```
+<p align="center"><img src="docs/media/how-it-works.svg" alt="A healthy request's debug lines are buffered and dropped, leaving one summary line; a failed request writes every buffered line in order" width="100%"></p>
 
 1. Middleware opens a scope for each request, keyed by its trace ID.
 2. Records below the pass level (Warn by default) are buffered in that scope. Warnings and errors are written immediately, as before.
@@ -185,6 +185,8 @@ Or use `flightrec.InvokeGRPCUnary` and `flightrec.InvokeGRPCStream` directly fro
 
 ### OpenTelemetry traces and logs
 
+<p align="center"><img src="docs/media/otel.svg" alt="SpanProcessor exports only the root span of a healthy trace and every span of a failed one" width="100%"></p>
+
 Use the `github.com/divine-ai-com/flightrec/otelflightrec` submodule to buffer finished child spans per trace and export them only when the trace or its linked `flightrec.Scope` triggers:
 
 ```go
@@ -211,6 +213,8 @@ rec := flightrec.New(flightrec.Options{
 ```
 
 ### Keep logs across services
+
+<p align="center"><img src="docs/media/cross-service.svg" alt="When inventory fails, the Flightrec-Flush header travels back to orders and gateway, and a Redis or NATS notifier reaches services that already finished" width="100%"></p>
 
 A failure in one service usually starts in a request that passed through several. flightrec can keep the logs of every service that handled the request, not only the one that failed. Each service needs the same trace ID for the request: OpenTelemetry propagation, or `X-Request-Id` set on outgoing calls, provides it.
 
@@ -245,6 +249,8 @@ On a service that answers clients outside your system, set `DisableFlushMarker: 
 [`examples/cross-service`](examples/cross-service) runs three services through both cases, in one process or with Docker Compose and Redis.
 
 ### Survive a hard kill
+
+<p align="center"><img src="docs/media/crash-recovery.svg" alt="Buffered records are copied to a memory-mapped journal; after kill -9 the next start recovers the in-flight requests" width="100%"></p>
 
 A request that is in flight when the process is killed (`SIGKILL`, an out-of-memory kill, a shutdown grace period that ran out) never reaches its flush, and its buffer dies with the process. Those are often the requests you most need to see. `StartJournal` writes every buffered record to a memory-mapped file that the kernel keeps when the process dies; the next start recovers the requests that did not finish:
 
