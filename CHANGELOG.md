@@ -2,6 +2,15 @@
 
 All notable changes to `flightrec` are documented in this file. This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.2.0] - 2026-11-15
+
+### Added
+- `otelflightrec` submodule (`github.com/divine-ai-com/flightrec/otelflightrec`) providing `SpanProcessor` (`go.opentelemetry.io/otel/sdk/trace.SpanProcessor`) that buffers finished child spans per trace in bounded memory (`MaxBytesPerTrace`, `MaxTotalBytes`) and exports them only when the trace or its linked `flightrec.Scope` triggers (#18).
+- Configurable healthy-trace export policies on `otelflightrec.SpanProcessor`: `HealthyExportRootOnly` (default: exports only the local root span annotated with `flightrec.dropped_spans` and discards child spans) and `HealthyExportNone` (exports nothing for healthy traces), plus `flightrec.flush_reason` and `flightrec.truncated` attributes on triggered traces (#19).
+- `otelflightrec.NewLogHandler` (`log/slog.Handler`) bridging `log/slog` and `flightrec.Recorder` to OpenTelemetry Logs (`go.opentelemetry.io/otel/log`) with original timestamps, structured group/attribute mapping, and `slogtest.TestHandler` compliance (#20).
+- Zero-allocation log-time `TraceContext` (`TraceID`, `SpanID`, `TraceFlags`) capture in `flightrec.Recorder`, emitting `flightrec.span_id` on output records when an OpenTelemetry span was active at log time and restoring the log-time `SpanContext` into `ctx` when flushing buffered records to `Next.Handle` (#20).
+- Bidirectional `ScopeObserver` hooks (`Recorder.AttachObserver`, `ScopeFromContext`, `Scope.AdoptGeneratedTraceID`) so `otelflightrec.SpanProcessor` and `flightrec.Recorder` coordinate triggers and trace IDs regardless of middleware wrapping order (#18, #20).
+
 ## [v0.1.1] - 2026-11-15
 
 ### Changed

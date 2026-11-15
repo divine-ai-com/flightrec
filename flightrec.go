@@ -92,6 +92,17 @@ type Options struct {
 	// a healthy (untriggered) scope completes.
 	DisableHealthySummary bool
 
+	// TraceExtractor optionally extracts a W3C TraceID and SpanID from ctx at
+	// log and scope-start time. When nil, the bridge registered via
+	// RegisterDefaultTraceBridge (automatically set by importing otelflightrec)
+	// is used.
+	TraceExtractor TraceExtractor
+
+	// TraceInjector optionally injects the log-time TraceContext back into ctx
+	// when flushing buffered records to Next.Handle. When nil, the bridge
+	// registered via RegisterDefaultTraceBridge is used.
+	TraceInjector TraceInjector
+
 	// Now returns the current time. Defaults to time.Now.
 	Now func() time.Time
 }
@@ -154,6 +165,10 @@ type recorderState struct {
 	listMu sync.Mutex
 	oldest *Scope
 	newest *Scope
+
+	obsMu       sync.Mutex
+	observers   []ScopeObserver
+	obsSnapshot atomic.Pointer[[]ScopeObserver]
 }
 
 func (st *recorderState) passLevel() slog.Level {
@@ -162,6 +177,29 @@ func (st *recorderState) passLevel() slog.Level {
 
 func (st *recorderState) bufferLevel() slog.Level {
 	return st.bufferLeveler.Level()
+}
+
+func (st *recorderState) extractTraceContext(ctx context.Context) TraceContext {
+	if ctx == nil {
+		return TraceContext{}
+	}
+	if st.opts.TraceExtractor != nil {
+		return st.opts.TraceExtractor(ctx)
+	}
+	return extractDefaultTraceContext(ctx)
+}
+
+func (st *recorderState) injectTraceContext(ctx context.Context, tc TraceContext) context.Context {
+	if !tc.HasTraceID() && !tc.HasSpanID() {
+		return ctx
+	}
+	if st.opts.TraceInjector != nil {
+		return st.opts.TraceInjector(ctx, tc)
+	}
+	if bp := defaultTraceBridge.Load(); bp != nil && bp.inject != nil {
+		return bp.inject(ctx, tc)
+	}
+	return ctx
 }
 
 // New creates a new Recorder with the given Options.
@@ -256,12 +294,14 @@ func (r *Recorder) Handle(ctx context.Context, rec slog.Record) error {
 		return r.next.Handle(ctx, rec)
 	}
 
+	tc := st.extractTraceContext(ctx)
+
 	if rec.Level >= st.passLevel() {
 		if rec.Level >= slog.LevelError {
 			sc.Trigger("error_log")
 		}
 		st.recordsPassedThrough.Add(1)
-		outRec := r.buildOutputRecord(rec, sc.meta.TraceID, "", false, 0)
+		outRec := r.buildOutputRecord(rec, sc.TraceID(), tc.SpanIDHex(), "", false, 0)
 		return st.baseNext.Handle(ctx, outRec)
 	}
 
@@ -271,11 +311,11 @@ func (r *Recorder) Handle(ctx context.Context, rec slog.Record) error {
 
 	cloned := cloneAndResolveRecord(rec)
 	payloadSize := estimateRecordPayloadSize(&cloned, r)
-	if !sc.bufferRecord(cloned, r, payloadSize) {
+	if !sc.bufferRecord(cloned, r, payloadSize, tc) {
 		// The scope has already ended; pass the late record through so it is
 		// neither silently lost nor uncounted.
 		st.recordsPassedThrough.Add(1)
-		outRec := r.buildOutputRecord(cloned, sc.meta.TraceID, "", false, 0)
+		outRec := r.buildOutputRecord(cloned, sc.TraceID(), tc.SpanIDHex(), "", false, 0)
 		return st.baseNext.Handle(ctx, outRec)
 	}
 	return nil
@@ -351,6 +391,7 @@ type bufferedEntry struct {
 	rec      slog.Record
 	recorder *Recorder
 	size     int64
+	traceCtx TraceContext
 }
 
 // Scope represents a single request or unit-of-work buffer.
@@ -371,6 +412,7 @@ type Scope struct {
 	truncated         bool
 	evictedByTotalCap bool
 	droppedInScope    uint64
+	generatedTraceID  bool
 	closed            bool
 
 	// Doubly-linked list pointers guarded by state.listMu.
@@ -385,21 +427,30 @@ type Scope struct {
 //
 // The underlying ring buffer is allocated lazily on the first buffered record.
 func StartScope(ctx context.Context, rec *Recorder, meta ScopeMeta) (context.Context, *Scope) {
+	st := rec.state
 	if meta.TraceID == "" {
-		meta.TraceID = TraceID(ctx)
+		if sc := scopeFromContext(ctx); sc != nil {
+			meta.TraceID = sc.TraceID()
+		} else if tc := st.extractTraceContext(ctx); tc.HasTraceID() {
+			meta.TraceID = tc.TraceIDHex()
+		}
 	}
+	generated := false
 	if meta.TraceID == "" {
 		meta.TraceID = generateTraceID()
+		generated = true
 	}
-	st := rec.state
 	sc := &Scope{
-		state:     st,
-		meta:      meta,
-		startTime: st.now(),
+		state:            st,
+		meta:             meta,
+		startTime:        st.now(),
+		generatedTraceID: generated,
 	}
 	st.activeScopes.Add(1)
 	st.scopesStarted.Add(1)
-	return context.WithValue(ctx, scopeContextKey{}, sc), sc
+	scopeCtx := context.WithValue(ctx, scopeContextKey{}, sc)
+	st.notifyScopeStart(scopeCtx, sc, meta.TraceID)
+	return scopeCtx, sc
 }
 
 // Flush marks the active Scope in ctx as triggered with the provided reason so
@@ -415,13 +466,17 @@ func Flush(ctx context.Context, reason string) {
 	sc.Trigger(reason)
 }
 
-// TraceID returns the trace ID of the active Scope in ctx, or "" if none.
+// TraceID returns the trace ID of the active Scope or OpenTelemetry span in
+// ctx, or "" if none is present.
 func TraceID(ctx context.Context) string {
 	sc := scopeFromContext(ctx)
-	if sc == nil {
-		return ""
+	if sc != nil {
+		return sc.TraceID()
 	}
-	return sc.meta.TraceID
+	if tc := extractDefaultTraceContext(ctx); tc.HasTraceID() {
+		return tc.TraceIDHex()
+	}
+	return ""
 }
 
 func scopeFromContext(ctx context.Context) *Scope {
@@ -434,18 +489,26 @@ func scopeFromContext(ctx context.Context) *Scope {
 
 // Trigger marks the scope to be flushed on End. The first non-empty reason is kept.
 func (s *Scope) Trigger(reason string) {
+	if reason == "" {
+		reason = "triggered"
+	}
 	s.mu.Lock()
+	var notify bool
+	var tid string
 	if !s.triggered {
 		s.triggered = true
-		if reason == "" {
-			reason = "triggered"
-		}
 		s.triggerReason = reason
+		tid = s.meta.TraceID
+		notify = !s.closed
 	}
 	s.mu.Unlock()
+
+	if notify && s.state != nil {
+		s.state.notifyScopeTrigger(s, tid, reason)
+	}
 }
 
-func (s *Scope) bufferRecord(rec slog.Record, recorder *Recorder, payloadSize int64) bool {
+func (s *Scope) bufferRecord(rec slog.Record, recorder *Recorder, payloadSize int64, tc TraceContext) bool {
 	st := s.state
 	maxPerScope := st.opts.MaxPerScope
 
@@ -491,6 +554,7 @@ func (s *Scope) bufferRecord(rec slog.Record, recorder *Recorder, payloadSize in
 		rec:      rec,
 		recorder: recorder,
 		size:     payloadSize,
+		traceCtx: tc,
 	}
 	s.count++
 	s.payloadBytes += payloadSize
@@ -658,6 +722,9 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 		s.triggerReason = "slow_request"
 	}
 
+	traceID := s.meta.TraceID
+	method := s.meta.Method
+	path := s.meta.Path
 	triggered := s.triggered
 	reason := s.triggerReason
 	truncated := s.truncated
@@ -678,14 +745,22 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	}
 	st.activeScopes.Add(-1)
 
+	scopeTraceBytes, hasScopeTraceBytes := ParseTraceIDHex(traceID)
+
 	if triggered {
 		st.scopesFlushed.Add(1)
 		for i, e := range entries {
 			includeTruncMeta := truncated && i == 0
-			outRec := e.recorder.buildOutputRecord(e.rec, s.meta.TraceID, reason, includeTruncMeta, droppedInScope)
-			_ = st.baseNext.Handle(ctx, outRec)
+			tc := e.traceCtx
+			if !tc.HasTraceID() && hasScopeTraceBytes {
+				tc.TraceID = scopeTraceBytes
+			}
+			outRec := e.recorder.buildOutputRecord(e.rec, traceID, tc.SpanIDHex(), reason, includeTruncMeta, droppedInScope)
+			recCtx := st.injectTraceContext(ctx, tc)
+			_ = st.baseNext.Handle(recCtx, outRec)
 		}
 		st.recordsFlushed.Add(uint64(len(entries)))
+		st.notifyScopeEnd(s, traceID, true, reason)
 		return
 	}
 
@@ -696,7 +771,7 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	if !st.opts.DisableHealthySummary {
 		summary := slog.NewRecord(now, slog.LevelInfo, "request completed", 0)
 		summary.AddAttrs(
-			slog.String("flightrec.trace_id", s.meta.TraceID),
+			slog.String("flightrec.trace_id", traceID),
 			slog.Duration("duration", duration),
 			slog.Uint64("flightrec.dropped_records", droppedCount),
 		)
@@ -705,14 +780,19 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 		} else if statusCode > 0 {
 			summary.AddAttrs(slog.Int("status", statusCode))
 		}
-		if s.meta.Method != "" {
-			summary.AddAttrs(slog.String("method", s.meta.Method))
+		if method != "" {
+			summary.AddAttrs(slog.String("method", method))
 		}
-		if s.meta.Path != "" {
-			summary.AddAttrs(slog.String("path", s.meta.Path))
+		if path != "" {
+			summary.AddAttrs(slog.String("path", path))
 		}
-		_ = st.baseNext.Handle(ctx, summary)
+		summaryCtx := ctx
+		if tc := st.extractTraceContext(ctx); !tc.HasTraceID() && hasScopeTraceBytes {
+			summaryCtx = st.injectTraceContext(ctx, TraceContext{TraceID: scopeTraceBytes})
+		}
+		_ = st.baseNext.Handle(summaryCtx, summary)
 	}
+	st.notifyScopeEnd(s, traceID, false, "")
 }
 
 func (st *recorderState) ensureLinked(sc *Scope) {
@@ -755,28 +835,30 @@ func (st *recorderState) enforceTotalCap(current *Scope) {
 	for st.totalBytes.Load() > st.opts.MaxTotal {
 		st.listMu.Lock()
 		victim := st.oldest
-		if victim == current && victim.next != nil {
+		for victim != nil && victim == current && victim.next != nil {
 			victim = victim.next
+		}
+		if victim == nil {
+			st.listMu.Unlock()
+			return
 		}
 		st.listMu.Unlock()
 
-		if victim == nil {
-			return
-		}
-
 		victim.mu.Lock()
-		if victim.closed || victim.bytes == 0 {
+		if victim.closed {
 			st.unlinkScope(victim)
 			victim.mu.Unlock()
-			if victim == current {
-				return
-			}
 			continue
 		}
-		droppedInt, freed := victim.clearAndReleasePoolLocked()
-		dropped := uint64(droppedInt)
-		victim.truncated = true
-		victim.droppedInScope += dropped
+		var dropped uint64
+		var freed int64
+		if victim.count > 0 || victim.bytes > 0 {
+			c, b := victim.clearAndReleasePoolLocked()
+			dropped = uint64(c)
+			freed = b
+			victim.truncated = true
+			victim.droppedInScope += dropped
+		}
 		alreadyEvicted := victim.evictedByTotalCap
 		victim.evictedByTotalCap = true
 		st.unlinkScope(victim)
@@ -797,10 +879,13 @@ func (st *recorderState) enforceTotalCap(current *Scope) {
 	}
 }
 
-func (r *Recorder) buildOutputRecord(rec slog.Record, traceID, flushReason string, truncated bool, droppedInScope uint64) slog.Record {
+func (r *Recorder) buildOutputRecord(rec slog.Record, traceID, spanID, flushReason string, truncated bool, droppedInScope uint64) slog.Record {
 	out := slog.NewRecord(rec.Time, rec.Level, rec.Message, rec.PC)
 	if traceID != "" {
 		out.AddAttrs(slog.String("flightrec.trace_id", traceID))
+	}
+	if spanID != "" {
+		out.AddAttrs(slog.String("flightrec.span_id", spanID))
 	}
 	if flushReason != "" {
 		out.AddAttrs(slog.String("flightrec.flush_reason", flushReason))

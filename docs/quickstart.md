@@ -76,3 +76,25 @@ func processJob(parentCtx context.Context, rec *flightrec.Recorder, jobID string
     return nil
 }
 ```
+
+## 5. OpenTelemetry Traces and Logs (`otelflightrec`)
+
+Install the OpenTelemetry submodule:
+
+```bash
+go get github.com/divine-ai-com/flightrec/otelflightrec@v0.2.0
+```
+
+Attach `otelflightrec.SpanProcessor` to your OpenTelemetry `TracerProvider` and link it to `rec`:
+
+```go
+sp := otelflightrec.NewSpanProcessor(otelflightrec.SpanProcessorOptions{
+    Next:          sdktrace.NewBatchSpanProcessor(spanExporter),
+    Recorder:      rec,
+    HealthyPolicy: otelflightrec.HealthyExportRootOnly, // or HealthyExportNone
+    SlowAfter:     2 * time.Second,
+})
+tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
+```
+
+Healthy traces discard their child spans and export only the root span (with `flightrec.dropped_spans`). Failed or slow traces export all buffered child spans and flush all buffered `slog` records with matching `flightrec.trace_id` and child `flightrec.span_id`.
