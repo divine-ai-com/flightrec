@@ -44,7 +44,7 @@ func (st *recorderState) recoverPending(path string) error {
 	case journal.ClassMissing:
 		return nil
 	case journal.ClassJournal:
-		if os.Rename(path, recovering) == nil {
+		if os.Rename(path, recovering) == nil { //nolint:gosec // G703: the path is the journal path the application configured
 			return st.recoverFile(recovering)
 		}
 	}

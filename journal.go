@@ -155,7 +155,7 @@ func (r *Recorder) StartJournal(path string, opts ...JournalOption) (stop func()
 			defer unlock()
 			st.journal.CompareAndSwap(js, nil)
 			err = f.Close(true)
-			if rmErr := os.Remove(path); err == nil {
+			if rmErr := os.Remove(path); err == nil { //nolint:gosec // G703: the path is the journal path the application configured
 				err = rmErr
 			}
 		})
