@@ -1,0 +1,93 @@
+name: Benchmarks
+
+# Compares the core module's benchmarks between two refs with benchstat.
+# Runs on every push to main (against the previous commit) and on demand.
+# Results go to the job summary and an artifact; the job never fails on a
+# slowdown, because shared runners are too noisy to gate on.
+
+on:
+  push:
+    branches: [main]
+    paths: ['**.go', 'go.mod']
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Ref to compare against
+        required: true
+        default: v0.2.0
+      head:
+        description: Ref to measure
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: benchstat
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.x
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e
+      - name: Choose refs
+        id: refs
+        env:
+          BASE: ${{ inputs.base }}
+          HEAD: ${{ inputs.head }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "base=$BASE" >> "$GITHUB_OUTPUT"
+            echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=$BEFORE" >> "$GITHUB_OUTPUT"
+            echo "head=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run benchmarks
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          # Build both test binaries first, then alternate runs so that
+          # changes in runner load affect both sides equally.
+          for side in base head; do
+            ref=$BASE; [ "$side" = head ] && ref=$HEAD
+            git worktree add --detach "/tmp/$side" "$ref"
+            (cd "/tmp/$side" && go test -c -o "/tmp/$side.test" .)
+          done
+          for i in $(seq 1 10); do
+            for side in base head; do
+              (cd "/tmp/$side" && "/tmp/$side.test" -test.run '^$' -test.bench . -test.benchmem -test.count 1) >> "$side.txt"
+            done
+          done
+      - name: Compare
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          {
+            echo "### Core benchmarks: \`$BASE\` vs \`$HEAD\`"
+            echo
+            echo "Runner: $(nproc) vCPU, $(go version | cut -d' ' -f3). 10 alternating runs each."
+            echo
+            echo '```'
+            benchstat base=base.txt head=head.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmarks
+          path: |
+            base.txt
+            head.txt
