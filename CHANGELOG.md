@@ -4,6 +4,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Changed
+- With OpenTelemetry middleware inside `HTTPMiddleware`, a scope keyed by a request header (`traceparent`, `X-Trace-Id`, `X-Request-Id`) takes the server span's trace ID when the span starts, as a generated ID already did, so logs and spans agree in either middleware order. The header ID stays an alias: notifier notices for it still reach the scope (and its child scopes), failures are announced under both IDs, the per-trace cap of retained scopes applies to both, and flushed records and the summary line carry it as `flightrec.request_id`. The adoption is journaled, so recovered records carry the same IDs (#96).
+
 ## [v0.5.0] - 2026-11-15
 
 Fixes from the first end-to-end test of the released modules: three services under load, with Redis, NATS, OpenTelemetry export and `kill -9` (see [docs/e2e-report.md](docs/e2e-report.md)). Three changes alter behaviour, listed under Changed.

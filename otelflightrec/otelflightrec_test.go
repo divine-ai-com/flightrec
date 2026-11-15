@@ -333,8 +333,19 @@ func TestOutboundSpanErrors(t *testing.T) {
 }
 
 func TestBothHTTPMiddlewareOrdersCoordinateLogsAndTraces(t *testing.T) {
-	for _, order := range []string{"otel_outer", "flightrec_outer"} {
-		t.Run(order, func(t *testing.T) {
+	for _, tc := range []struct{ order, requestID string }{
+		{"otel_outer", ""},
+		{"flightrec_outer", ""},
+		// A proxy-added X-Request-Id must not split logs from spans (#96).
+		{"otel_outer", "lb-req-1"},
+		{"flightrec_outer", "lb-req-1"},
+	} {
+		order := tc.order
+		name := tc.requestID
+		if name == "" {
+			name = "no-header"
+		}
+		t.Run(order+"/"+name, func(t *testing.T) {
 			logBuf := &syncBuffer{}
 			rec := flightrec.New(flightrec.Options{
 				Next:          slog.NewJSONHandler(logBuf, nil),
@@ -377,6 +388,9 @@ func TestBothHTTPMiddlewareOrdersCoordinateLogsAndTraces(t *testing.T) {
 			}
 
 			req := httptest.NewRequest(http.MethodPost, "/pay", nil)
+			if tc.requestID != "" {
+				req.Header.Set("X-Request-Id", tc.requestID)
+			}
 			rr := httptest.NewRecorder()
 			handler.ServeHTTP(rr, req)
 

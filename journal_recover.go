@@ -76,8 +76,10 @@ func (st *recorderState) recoverFile(path string) error {
 type recoveredScope struct {
 	id      uint64
 	start   scopeStart
-	started bool // the start entry survived
-	dropped int  // records too large to journal
+	started bool   // the start entry survived
+	dropped int    // records too large to journal
+	rekeyed string // trace ID adopted after the start, if any
+	alias   string // header ID kept as an alias by that adoption
 	records []journalRecord
 }
 
@@ -155,6 +157,13 @@ func (st *recorderState) recoverJournal(path string) {
 				sc.start, sc.started = s, true
 			case journal.KindDropped:
 				sc.dropped++
+			case journal.KindRekey:
+				tid, alias, err := decodeScopeRekey(e.Payload)
+				if err != nil {
+					st.journalCorrupt.Add(1)
+					return
+				}
+				sc.rekeyed, sc.alias = tid, alias
 			case journal.KindRecord:
 				jr, err := decodeJournalRecord(e.Payload)
 				if err != nil {
@@ -180,6 +189,9 @@ func (st *recorderState) recoverJournal(path string) {
 // summary.
 func (st *recorderState) recoverScope(sc *recoveredScope, host string, processStart time.Time) {
 	traceID := sc.start.traceID
+	if sc.rekeyed != "" {
+		traceID = sc.rekeyed // adopted a span's trace after it started
+	}
 	if traceID == "" {
 		// The start entry was overwritten: take the trace from a record.
 		for _, jr := range sc.records {
@@ -198,6 +210,9 @@ func (st *recorderState) recoverScope(sc *recoveredScope, host string, processSt
 	if traceID == "" {
 		// Nothing else tells apart the records of scopes without a trace.
 		recovered = append(recovered, slog.Uint64("flightrec.recovered_scope", sc.id))
+	}
+	if sc.alias != "" {
+		recovered = append(recovered, slog.String("flightrec.request_id", sc.alias))
 	}
 
 	written := 0

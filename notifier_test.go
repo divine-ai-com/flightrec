@@ -6,7 +6,10 @@ package flightrec_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -342,4 +345,103 @@ func TestNotifierNoticeRacingRetain(t *testing.T) {
 	if st := b.rec.Stats(); st.NotifierDeliveryDropped != 0 || st.RetainedScopes != 0 {
 		t.Errorf("unexpected drops or leftovers: %+v", st)
 	}
+}
+
+// TestAdoptedHeaderIDStaysAnAlias covers a service that receives a forwarded
+// X-Request-Id, then adopts its OpenTelemetry span's trace (flightrec outside
+// the OTel middleware). Other services know the request only by the header:
+// their notices must still reach it, and its failures must reach them.
+func TestAdoptedHeaderIDStaysAnAlias(t *testing.T) {
+	const spanTrace = "4bf92f3577b34da6a3ce929d0e0e4736"
+	serve := func(n *node, requestID string, status int) {
+		h := flightrec.HTTPMiddleware(n.rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sc := flightrec.ScopeFromContext(r.Context())
+			if old, ok := sc.AdoptGeneratedTraceID(spanTrace); !ok || old != requestID {
+				t.Errorf("AdoptGeneratedTraceID = %q, %v; want %q, true", old, ok, requestID)
+			}
+			n.log.DebugContext(r.Context(), "handled", "id", requestID)
+			w.WriteHeader(status)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Request-Id", requestID)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	t.Run("notice for the header ID flushes the adopted scope", func(t *testing.T) {
+		bus := memnotifier.New()
+		b := newNode(t, bus, flightrec.Options{Retain: time.Minute})
+		c := newNode(t, bus, flightrec.Options{})
+		listening(t, bus, 2)
+		serve(b, "req-T", http.StatusOK)
+		failRequest(c, "req-T")
+		eventually(t, "b to flush its retained scope", func() bool { return b.rec.Stats().RemoteFlushes == 1 })
+		if out := b.out.String(); !strings.Contains(out, "remote:http_502") || !strings.Contains(out, spanTrace) || !strings.Contains(out, `"flightrec.request_id":"req-T"`) {
+			t.Errorf("b output:\n%s", out)
+		}
+	})
+
+	t.Run("failure is announced under the header ID too", func(t *testing.T) {
+		bus := memnotifier.New()
+		a := newNode(t, bus, flightrec.Options{Retain: time.Minute})
+		b := newNode(t, bus, flightrec.Options{})
+		listening(t, bus, 2)
+		healthyRequest(a.rec, a.log, "req-U", "a: forwarded req-U")
+		serve(b, "req-U", http.StatusBadGateway)
+		eventually(t, "a to flush its retained scope", func() bool { return a.rec.Stats().RemoteFlushes == 1 })
+	})
+}
+
+func TestExplicitTraceIDIsNeverAdopted(t *testing.T) {
+	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "job-7"})
+	defer sc.End(ctx, 200)
+	if _, ok := sc.AdoptGeneratedTraceID("4bf92f3577b34da6a3ce929d0e0e4736"); ok || sc.TraceID() != "job-7" {
+		t.Errorf("explicit trace ID replaced: %q", sc.TraceID())
+	}
+	gctx, gen := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{})
+	defer gen.End(gctx, 200)
+	id := gen.TraceID()
+	if _, ok := gen.AdoptGeneratedTraceID(id); ok {
+		t.Error("adopting the same ID reported a change")
+	}
+}
+
+// TestAliasRetainedCap checks that the per-trace cap of retained scopes holds
+// for a forwarded request ID shared by many scopes with their own span traces.
+func TestAliasRetainedCap(t *testing.T) {
+	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug, Retain: time.Minute})
+	log := slog.New(rec)
+	for i := range 20 {
+		h := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			flightrec.ScopeFromContext(r.Context()).AdoptGeneratedTraceID(fmt.Sprintf("%016x0000000000000001", uint64(0x1000000000000000)+uint64(i)))
+			log.DebugContext(r.Context(), "x")
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Request-Id", "req-same")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	if n := rec.FlushTrace(context.Background(), "req-same", "test"); n != 8 {
+		t.Errorf("FlushTrace(alias) wrote %d scopes, want the cap of 8", n)
+	}
+}
+
+func TestChildScopeInheritsAlias(t *testing.T) {
+	bus := memnotifier.New()
+	b := newNode(t, bus, flightrec.Options{})
+	c := newNode(t, bus, flightrec.Options{})
+	listening(t, bus, 2)
+	done := make(chan struct{})
+	h := flightrec.HTTPMiddleware(b.rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flightrec.ScopeFromContext(r.Context()).AdoptGeneratedTraceID("4bf92f3577b34da6a3ce929d0e0e4736")
+		ctx, child := flightrec.StartScope(r.Context(), b.rec, flightrec.ScopeMeta{})
+		b.log.DebugContext(ctx, "child work")
+		failRequest(c, "req-V")
+		eventually(t, "the child to be triggered", func() bool { ok, _ := child.TriggerState(); return ok })
+		child.End(ctx, 200)
+		close(done)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", "req-V")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	<-done
 }
