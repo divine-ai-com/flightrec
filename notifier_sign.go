@@ -35,10 +35,18 @@ func (o signingKeyOption) applyNotifier(c *notifierConfig) { c.keys = o.keys }
 // Stats.NotifierRejected.
 //
 // Without it, anyone who can publish on the notifier's channel can make
-// every service flush or trigger scopes for any trace ID. Use the same key in
-// every process on the channel; during a rotation, sign with the new key and
-// list the old one in verifyAlso until every process has the new key. Keys
-// must be at least 32 bytes; WithSigningKey panics on a shorter key.
+// every service flush or trigger scopes for any trace ID. Use the same key,
+// at least 32 random bytes (not 32 characters of a password), in every
+// process on the channel; WithSigningKey panics on a shorter key.
+//
+// Signed and unsigned processes reject each other's messages, so enable
+// signing on every process of a channel in one deploy (or move to a new
+// channel). To rotate keys with rolling deploys, take three steps, each
+// rolled out everywhere before the next:
+//
+//  1. WithSigningKey(old, new): sign with old, accept both.
+//  2. WithSigningKey(new, old): sign with new, accept both.
+//  3. WithSigningKey(new).
 func WithSigningKey(key []byte, verifyAlso ...[]byte) NotifierOption {
 	keys := [][]byte{key}
 	keys = append(keys, verifyAlso...)
@@ -78,15 +86,18 @@ func openNotifierMessage(keys [][]byte, msg []byte, now time.Time) ([]byte, bool
 		return nil, false
 	}
 	signed, sigHex := msg[:sigAt], msg[sigAt+1:]
-	sig := make([]byte, hex.DecodedLen(len(sigHex)))
-	if n, err := hex.Decode(sig, sigHex); err != nil || n != sha256.Size {
+	if len(sigHex) != hex.EncodedLen(sha256.Size) {
+		return nil, false
+	}
+	var sig [sha256.Size]byte
+	if _, err := hex.Decode(sig[:], sigHex); err != nil {
 		return nil, false
 	}
 	ok := false
 	for _, k := range keys {
 		mac := hmac.New(sha256.New, k)
 		mac.Write(signed)
-		if hmac.Equal(mac.Sum(nil), sig) {
+		if hmac.Equal(mac.Sum(nil), sig[:]) {
 			ok = true
 		}
 	}
