@@ -219,6 +219,27 @@ type Stats struct {
 	// JournalOldestAge is the time span the journal currently covers: older
 	// records have been overwritten.
 	JournalOldestAge time.Duration
+
+	// The counters below describe recovery at StartJournal and add up over
+	// the life of the Recorder.
+	//
+	// JournalRecoveredScopes counts interrupted requests recovered from a
+	// journal left by a killed process; JournalRecoveredRecords counts their
+	// records Next accepted.
+	JournalRecoveredScopes  uint64
+	JournalRecoveredRecords uint64
+	// JournalCorruptEntries counts journal entries or blocks that failed
+	// their checks during recovery: torn writes, or damage to the file.
+	JournalCorruptEntries uint64
+	// JournalDiscardedFiles counts journal files deleted without recovery:
+	// a damaged header, a symlink, or a file not private to this user.
+	JournalDiscardedFiles uint64
+	// JournalAbandonedRecoveries counts journal files deleted after three
+	// recovery attempts that did not finish, such as a crash during recovery.
+	JournalAbandonedRecoveries uint64
+	// JournalRecoveryErrors counts recovered records that Next failed to
+	// write, by returning an error or panicking.
+	JournalRecoveryErrors uint64
 }
 
 type groupFrame struct {
@@ -277,6 +298,13 @@ type recorderState struct {
 	journal    atomic.Pointer[journalState]
 	journalMu  sync.Mutex // serializes StartJournal and stop
 	journalIDs atomic.Uint64
+
+	journalRecoveredScopes  atomic.Uint64
+	journalRecoveredRecords atomic.Uint64
+	journalCorrupt          atomic.Uint64
+	journalDiscarded        atomic.Uint64
+	journalAbandoned        atomic.Uint64
+	journalRecoveryErrors   atomic.Uint64
 
 	hub   atomic.Pointer[notifierHub]
 	hubMu sync.Mutex // serializes StartNotifier and stop

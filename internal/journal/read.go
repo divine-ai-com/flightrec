@@ -38,45 +38,62 @@ func Read(data []byte) (Header, []Entry, ReadStats, error) {
 	if int64(len(data)) < h.Size {
 		return Header{}, nil, ReadStats{}, ErrBadHeader
 	}
-	n, _ := blocksPerStripe(h.Size, h.Stripes)
-
 	var out []Entry
 	var st ReadStats
 	for s := 0; s < int(h.Stripes); s++ {
-		base := HeaderSize + s*n*BlockSize
-		type blk struct {
-			at      int
-			logical uint64
-			started int64
-		}
-		var blocks []blk
-		for b := 0; b < n; b++ {
-			at := base + b*BlockSize
-			logical, started, ok := decodeBlockHeader(data[at:], h.Salt)
-			// The writer puts logical block L at physical block (L-1) mod n;
-			// anything else is not a block it wrote.
-			if ok && logical > 0 && (logical-1)%uint64(n) == uint64(b) {
-				blocks = append(blocks, blk{at, logical, started})
-			}
-		}
-		sort.Slice(blocks, func(i, j int) bool { return blocks[i].logical < blocks[j].logical })
-		for _, b := range blocks {
-			st.Blocks++
-			entries, invalid := readBlock(data[b.at:b.at+BlockSize], h.Salt, b.logical, b.started, s)
-			out = append(out, entries...)
-			st.Entries += len(entries)
-			if invalid {
-				st.Invalid++
-			}
-		}
+		off, n := StripeRange(h, s)
+		rs := WalkStripe(h, data[off:off+n], s, func(e Entry) { out = append(out, e) })
+		st.Blocks += rs.Blocks
+		st.Entries += rs.Entries
+		st.Invalid += rs.Invalid
 	}
 	return h, out, st, nil
 }
 
-// readBlock returns the valid entries of one block, and whether reading
-// stopped at an invalid entry rather than at the end of the written data.
-func readBlock(b []byte, salt, logical uint64, started int64, stripe int) ([]Entry, bool) {
-	var out []Entry
+// StripeRange returns the offset and length of stripe s in a journal with
+// header h. h must come from DecodeHeader.
+func StripeRange(h Header, s int) (off, n int64) {
+	blocks, _ := blocksPerStripe(h.Size, h.Stripes)
+	n = int64(blocks) * BlockSize
+	return HeaderSize + int64(s)*n, n
+}
+
+// WalkStripe calls fn for each valid entry of stripe s, whose bytes are data,
+// in the order they were written. Entry payloads point into data.
+func WalkStripe(h Header, data []byte, s int, fn func(Entry)) ReadStats {
+	var st ReadStats
+	n := len(data) / BlockSize
+	type blk struct {
+		at      int
+		logical uint64
+		started int64
+	}
+	var blocks []blk
+	for b := 0; b < n; b++ {
+		at := b * BlockSize
+		logical, started, ok := decodeBlockHeader(data[at:], h.Salt)
+		// The writer puts logical block L at physical block (L-1) mod n;
+		// anything else is not a block it wrote.
+		if ok && logical > 0 && (logical-1)%uint64(n) == uint64(b) {
+			blocks = append(blocks, blk{at, logical, started})
+		}
+	}
+	sort.Slice(blocks, func(i, j int) bool { return blocks[i].logical < blocks[j].logical })
+	for _, b := range blocks {
+		st.Blocks++
+		entries, invalid := readBlock(data[b.at:b.at+BlockSize], h.Salt, b.logical, b.started, s, fn)
+		st.Entries += entries
+		if invalid {
+			st.Invalid++
+		}
+	}
+	return st
+}
+
+// readBlock calls fn for the valid entries of one block and returns how many
+// there were, and whether reading stopped at an invalid entry rather than at
+// the end of the written data.
+func readBlock(b []byte, salt, logical uint64, started int64, stripe int, fn func(Entry)) (out int, invalid bool) {
 	seed := blockSeed(salt, logical)
 	off := blockHeaderSize
 	for off+entryHeaderSize <= len(b) {
@@ -112,7 +129,8 @@ func readBlock(b []byte, salt, logical uint64, started int64, stripe int) ([]Ent
 		if !validKind(kind) {
 			return out, true
 		}
-		out = append(out, Entry{
+		out++
+		fn(Entry{
 			Kind:      kind,
 			Scope:     binary.LittleEndian.Uint64(e[8:]),
 			Payload:   e[entryHeaderSize : entryHeaderSize+payloadLen],
