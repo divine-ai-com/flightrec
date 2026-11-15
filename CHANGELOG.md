@@ -4,6 +4,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Changed
+- Trace ID headers with whitespace, quotes, control characters, non-ASCII bytes or more than 128 bytes are no longer used; such requests get a generated trace ID instead. IDs such as UUIDs, ULIDs, base64 and `host/sequence` request IDs are unaffected (#49).
+
 ### Added
 - `HTTPMiddleware` sets the `Flightrec-Flush` response header (`flightrec.FlushHeader`) when a scope is triggered before its headers are written, so callers can keep their own logs for the same request. The value is a built-in reason such as `http_502` or `slow_request`; custom `Flush` reasons are sent as `explicit_flush`. `Options.DisableFlushMarker` turns the header off for services that answer external clients. The header is removed from incoming requests. `Stats` gains `FlushMarkersSent` and `FlushMarkersMissed` (#39).
 - `NewTransport` wraps an `http.RoundTripper` so that a `Flightrec-Flush` header on a response triggers the caller's scope with reason `downstream:<reason>`; the flush then travels up the call chain. A value that is not exactly one built-in reason is ignored and counted, and the header is removed from the response. `MarkerValue` and `ValidMarker` expose the sending and checking rules for integrations. `Stats` gains `DownstreamTriggers` and `MarkersRejected` (#40).
@@ -12,7 +15,8 @@ All notable changes to `flightrec` are documented in this file. This project adh
 - An informational response such as `103 Early Hints` no longer becomes the recorded status of the request; the final status is used for the 5xx trigger and the summary line (#47).
 
 ### Security
-- Trace IDs taken from `X-Trace-Id`, `X-Request-Id` and the matching gRPC metadata are limited to 128 bytes of `[A-Za-z0-9_.:-]`; other values are ignored and a trace ID is generated. They are written to every log record and identify requests across services (#49).
+- Trace IDs taken from `X-Trace-Id`, `X-Request-Id` and the matching gRPC metadata, and from a custom `GRPCMetadataExtractor`, must be 1 to 128 bytes of letters, digits and `_ . : - / + = @`. An invalid value is skipped: the next header is tried, then an active OpenTelemetry span, then a generated ID. When a header repeats, the first valid value wins (#49).
+- `Options.IgnoreRequestTraceIDs` stops `HTTPMiddleware` and the gRPC helpers from taking trace IDs from incoming requests, for services that face clients outside your system (#49).
 
 ## [grpcflightrec/v0.2.1, otelflightrec/v0.2.1] - 2026-11-15
 

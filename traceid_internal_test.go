@@ -4,7 +4,11 @@
 package flightrec
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -13,23 +17,26 @@ func TestExtractHTTPTraceIDLimits(t *testing.T) {
 	long := strings.Repeat("a", maxTraceIDLen)
 	for _, tc := range []struct {
 		name      string
-		traceID   string
+		traceIDs  []string
 		requestID string
 		want      string
 	}{
-		{"plain request ID", "", "req-1041", "req-1041"},
-		{"maximum length", long, "", long},
-		{"too long falls through", long + "a", "req-1", "req-1"},
-		{"invalid characters fall through", "a b", "req-2", "req-2"},
-		{"control characters", "id\x00x", "", ""},
-		{"non-ASCII", "trace-é", "", ""},
-		{"JSON breaking", `x","admin":true`, "", ""},
-		{"trimmed", "  trace-9  ", "", "trace-9"},
+		{"plain request ID", nil, "req-1041", "req-1041"},
+		{"maximum length", []string{long}, "", long},
+		{"too long falls through", []string{long + "a"}, "req-1", "req-1"},
+		{"invalid characters fall through", []string{"a b"}, "req-2", "req-2"},
+		{"first valid repeated value wins", []string{"bad value", "trace-3"}, "", "trace-3"},
+		{"request ID middleware format", nil, "api-7f9c/AbCdEf1234-000042", "api-7f9c/AbCdEf1234-000042"},
+		{"base64", []string{"q83vEjRWeJA+/w=="}, "", "q83vEjRWeJA+/w=="},
+		{"control characters", []string{"id\x00x"}, "", ""},
+		{"non-ASCII", []string{"trace-é"}, "", ""},
+		{"JSON breaking", []string{`x","admin":true`}, "", ""},
+		{"trimmed", []string{"  trace-9  "}, "", "trace-9"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := http.Header{}
-			if tc.traceID != "" {
-				h["X-Trace-Id"] = []string{tc.traceID}
+			if tc.traceIDs != nil {
+				h["X-Trace-Id"] = tc.traceIDs
 			}
 			if tc.requestID != "" {
 				h["X-Request-Id"] = []string{tc.requestID}
@@ -51,8 +58,58 @@ func TestExtractTraceIDFromMetadataLimits(t *testing.T) {
 	}
 }
 
-// FuzzExtractHTTPTraceID checks that whatever a client sends, the trace ID is
-// either empty (a generated one is used) or within the documented limits.
+func TestMiddlewareTraceIDSource(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		opts   Options
+		header string
+		want   func(string) bool
+	}{
+		{"valid header is used", Options{}, "req-1041", func(id string) bool { return id == "req-1041" }},
+		{"invalid header is replaced by a generated ID", Options{}, "a b c", isGeneratedID},
+		{"IgnoreRequestTraceIDs ignores a valid header", Options{IgnoreRequestTraceIDs: true}, "req-1041", isGeneratedID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.opts.Next = slog.NewJSONHandler(io.Discard, nil)
+			rec := New(tc.opts)
+			var got string
+			h := HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = TraceID(r.Context())
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("X-Request-Id", tc.header)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			if !tc.want(got) {
+				t.Errorf("trace ID = %q", got)
+			}
+		})
+	}
+}
+
+func TestGRPCTraceIDSource(t *testing.T) {
+	ctx := WithIncomingMetadata(context.Background(), map[string][]string{"x-request-id": {"req-9"}})
+	if got := resolveGRPCTraceID(ctx, nil, false); got != "req-9" {
+		t.Errorf("metadata trace ID = %q, want req-9", got)
+	}
+	if got := resolveGRPCTraceID(ctx, nil, true); got != "" {
+		t.Errorf("with ignore set, trace ID = %q, want empty (generated later)", got)
+	}
+	bad := func(context.Context) string { return "has space" }
+	if got := resolveGRPCTraceID(ctx, bad, false); got != "req-9" {
+		t.Errorf("invalid custom extractor result was used: %q", got)
+	}
+}
+
+func isGeneratedID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	_, ok := ParseTraceIDHex(id)
+	return ok
+}
+
+// FuzzExtractHTTPTraceID checks that the trace ID is empty or one of the
+// inputs, within the limits, and that a valid X-Trace-Id beats X-Request-Id.
 func FuzzExtractHTTPTraceID(f *testing.F) {
 	f.Add("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "t-1", "r-1")
 	f.Add("", "a b", "\x00")
@@ -63,8 +120,45 @@ func FuzzExtractHTTPTraceID(f *testing.F) {
 		h["X-Trace-Id"] = []string{traceID}
 		h["X-Request-Id"] = []string{requestID}
 		got := extractHTTPTraceID(h)
-		if got != "" && !validTraceID(got) {
-			t.Fatalf("extractHTTPTraceID returned %q, outside the limits", got)
+		if got == "" {
+			return
+		}
+		if !validTraceID(got) {
+			t.Fatalf("result %q is outside the limits", got)
+		}
+		tp := parseW3CTraceparent(strings.TrimSpace(traceparent))
+		tid, rid := strings.TrimSpace(traceID), strings.TrimSpace(requestID)
+		switch {
+		case tp != "":
+			if got != tp {
+				t.Fatalf("got %q, want traceparent ID %q", got, tp)
+			}
+		case validTraceID(tid):
+			if got != tid {
+				t.Fatalf("got %q, want X-Trace-Id %q", got, tid)
+			}
+		default:
+			if got != rid {
+				t.Fatalf("got %q, want X-Request-Id %q", got, rid)
+			}
+		}
+	})
+}
+
+// FuzzExtractTraceIDFromMetadata applies the same property to gRPC metadata.
+func FuzzExtractTraceIDFromMetadata(f *testing.F) {
+	f.Add("t-1", "r-1")
+	f.Add("bad value", strings.Repeat("y", 300))
+	f.Fuzz(func(t *testing.T, traceID, requestID string) {
+		got := ExtractTraceIDFromMetadata(map[string][]string{
+			"x-trace-id":   {traceID},
+			"x-request-id": {requestID},
+		})
+		if got == "" {
+			return
+		}
+		if !validTraceID(got) || (got != strings.TrimSpace(traceID) && got != strings.TrimSpace(requestID)) {
+			t.Fatalf("result %q is not a valid input value", got)
 		}
 	})
 }

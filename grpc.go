@@ -38,8 +38,9 @@ func WithIncomingMetadata(ctx context.Context, md map[string][]string) context.C
 
 // ExtractTraceIDFromMetadata extracts a trace ID from a gRPC-style metadata
 // map (checking "traceparent", "x-trace-id", and "x-request-id"
-// case-insensitively). Values of x-trace-id and x-request-id longer than 128
-// bytes or containing characters outside [A-Za-z0-9_.:-] are ignored.
+// case-insensitively). Values of x-trace-id and x-request-id follow the same
+// rules as in HTTPMiddleware: the first value of 1 to 128 bytes of letters,
+// digits and _ . : - / + = @ wins.
 func ExtractTraceIDFromMetadata(md map[string][]string) string {
 	if len(md) == 0 {
 		return ""
@@ -91,7 +92,7 @@ func InvokeGRPCUnary(
 	req any,
 	handler GRPCUnaryHandler,
 ) (resp any, err error) {
-	traceID := resolveGRPCTraceID(ctx, extractTraceID)
+	traceID := resolveGRPCTraceID(ctx, extractTraceID, rec.state.opts.IgnoreRequestTraceIDs)
 	scopeCtx, sc := StartScope(ctx, rec, ScopeMeta{
 		TraceID: traceID,
 		Method:  "gRPC",
@@ -127,7 +128,7 @@ func InvokeGRPCStream(
 	extractTraceID GRPCMetadataExtractor,
 	handler GRPCStreamHandler,
 ) (err error) {
-	traceID := resolveGRPCTraceID(ctx, extractTraceID)
+	traceID := resolveGRPCTraceID(ctx, extractTraceID, rec.state.opts.IgnoreRequestTraceIDs)
 	scopeCtx, sc := StartScope(ctx, rec, ScopeMeta{
 		TraceID: traceID,
 		Method:  "gRPC",
@@ -154,11 +155,14 @@ func InvokeGRPCStream(
 	return handler(scopeCtx)
 }
 
-func resolveGRPCTraceID(ctx context.Context, extractTraceID GRPCMetadataExtractor) string {
+func resolveGRPCTraceID(ctx context.Context, extractTraceID GRPCMetadataExtractor, ignoreRequestIDs bool) string {
 	if extractTraceID != nil {
-		if tid := extractTraceID(ctx); tid != "" {
+		if tid := extractTraceID(ctx); validTraceID(tid) {
 			return tid
 		}
+	}
+	if ignoreRequestIDs {
+		return TraceID(ctx)
 	}
 	if ctx != nil {
 		if md, ok := ctx.Value(incomingMetadataContextKey{}).(map[string][]string); ok {

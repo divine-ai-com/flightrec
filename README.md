@@ -79,7 +79,7 @@ It is not the right tool when:
 - **Drop-in.** Wraps any `slog.Handler`. Adoption is three lines; existing log calls stay as they are.
 - **Five triggers.** Error log, 5xx or gRPC error, panic, slow request, or an explicit `Flush` from your own code.
 - **Bounded memory.** A cap per request and a cap for the process, with a counter for every drop.
-- **Trace IDs on every line.** Read from `traceparent`, `X-Trace-Id` or `X-Request-Id`, or generated.
+- **Trace IDs on every line.** Read from `traceparent`, `X-Trace-Id` or `X-Request-Id` (validated), an active OpenTelemetry span, or generated.
 - **No dependencies.** The module uses only the standard library.
 
 ## Install
@@ -220,6 +220,12 @@ Set both levels explicitly, as in the quick start. Outside a scope, records are 
 | --- | --- | --- |
 | `MaxPerScope` | 256 KB | The request drops its oldest records, and its flushed output is marked `flightrec.truncated` |
 | `MaxTotal` | 64 MB | The oldest requests lose their buffers |
+
+### Trace IDs from requests
+
+The trace ID is taken from `traceparent`, then `X-Trace-Id`, then `X-Request-Id`. `X-Trace-Id` and `X-Request-Id` values are used only when they are 1 to 128 bytes of letters, digits and `_ . : - / + = @`; otherwise the next source is tried, then an active OpenTelemetry span, and finally a generated ID.
+
+A client can choose these headers. On services that receive requests from outside your system, such as a public API, set `IgnoreRequestTraceIDs: true` so trace IDs come only from your own tracing or are generated. The same applies to the `Flightrec-Flush` response header, which `DisableFlushMarker: true` turns off.
 
 ### Monitor it
 
