@@ -27,3 +27,5 @@ What to know:
 - **Scope.** It survives the death of the process, not of the machine, and records are written at least once: a crash during a flush or during recovery can repeat some lines. Linux, macOS and the BSDs; elsewhere, including Windows, `StartJournal` returns `ErrJournalUnsupported`.
 
 [`examples/crash-recovery`](../examples/crash-recovery) kills a server with `kill -9` in the middle of a request and shows the recovered logs.
+
+See [Running flightrec safely](security.md#the-crash-journal) for where to put the journal.
