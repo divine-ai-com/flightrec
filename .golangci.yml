@@ -46,7 +46,7 @@ linters:
       - path: _test\.go$
         linters: [errcheck, gosec]
       # The demo and examples are not library code.
-      - path: (cmd/demo|examples)/
+      - path: examples/
         linters: [gosec]
 
 issues:

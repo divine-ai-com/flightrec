@@ -42,7 +42,7 @@ vuln: ## Run govulncheck in every module.
 
 .PHONY: demo
 demo: ## Run the volume and fidelity demo.
-	go run ./cmd/demo
+	go run ./examples/demo
 
 .PHONY: help
 help:
