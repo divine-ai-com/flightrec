@@ -88,6 +88,14 @@ type Options struct {
 	// (64 MB) when <= 0.
 	MaxTotal int64
 
+	// IgnoreRequestTraceIDs stops HTTPMiddleware and the gRPC helpers from
+	// taking trace IDs from traceparent, X-Trace-Id and X-Request-Id on
+	// incoming requests. Set it on services that receive requests from
+	// clients outside your system: a client could otherwise choose the trace
+	// ID that groups its requests. The trace ID then comes from an active
+	// OpenTelemetry span when one is present, or is generated.
+	IgnoreRequestTraceIDs bool
+
 	// DisableFlushMarker stops HTTPMiddleware from setting the FlushHeader
 	// response header. Set it on services whose responses go to clients
 	// outside your system, such as a public API or an edge gateway.
