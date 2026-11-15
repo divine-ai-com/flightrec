@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -289,7 +291,13 @@ func slogValueToOTelValue(v slog.Value) attribute.Value {
 	case slog.KindInt64:
 		return attribute.Int64Value(v.Int64())
 	case slog.KindUint64:
-		return attribute.Int64Value(int64(v.Uint64()))
+		u := v.Uint64()
+		if u > math.MaxInt64 {
+			// OpenTelemetry attributes have no unsigned type; keep the exact
+			// value as a string rather than wrap it to a negative number.
+			return attribute.StringValue(strconv.FormatUint(u, 10))
+		}
+		return attribute.Int64Value(int64(u))
 	case slog.KindFloat64:
 		return attribute.Float64Value(v.Float64())
 	case slog.KindBool:

@@ -4,6 +4,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Fixed
+- `otelflightrec.NewLogHandler` writes `uint64` attribute values above the `int64` range as decimal strings instead of wrapping them to negative numbers.
+
 ## [v0.3.0] - 2026-11-15
 
 Cross-service flush: a failure in one service keeps the logs of the other services that handled the same request (proposal 0001).
