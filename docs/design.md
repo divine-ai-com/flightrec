@@ -31,7 +31,7 @@ This page describes the core buffering design. Cross-service flush (`Retain`, no
 
 ## Code map and invariants
 
-The root package holds the public API, one concern per file: `recorder.go` (the `slog.Handler`), `scope.go` (request lifecycle), `buffer.go` (per-scope ring and `MaxTotal` eviction), `output.go`, `options.go`, `stats.go`, `trace.go`, `http.go`, `transport.go`, `marker.go`, `grpc.go`, `retain.go`, `notifier.go` and `journal*.go`. Machinery with no dependency on those types lives in `internal/`: `traceid` (validation, `traceparent`, generation), `snapshot` (copies of `slog.Any` values), `notify` (wire format, signing, limiters) and `journal` (file format, writer, reader).
+The root package holds the public API, one concern per file: `options.go`, `recorder.go` (the `slog.Handler`, stats and output records), `scope.go` (request lifecycle, per-scope ring and `MaxTotal` eviction), `trace.go`, `http.go` (middleware, transport and flush markers), `grpc.go`, `retain.go`, `notifier.go` and `journal.go` (journal, record encoding and recovery). Machinery with no dependency on those types lives in `internal/`: `traceid` (validation, `traceparent`, generation), `snapshot` (copies of `slog.Any` values), `notify` (wire format, signing, limiters) and `journal` (file format, writer, reader).
 
 Invariants the code relies on:
 
