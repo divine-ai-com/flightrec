@@ -203,6 +203,11 @@ func (s *Scope) AdoptGeneratedTraceID(traceID string) (string, bool) {
 	}
 	s.mu.Unlock()
 	if s.state != nil {
+		alias := ""
+		if keepAlias {
+			alias = old
+		}
+		s.state.journalRekey(s, traceID, alias)
 		if h := s.state.hub.Load(); h != nil {
 			h.scopeRekeyed(s, old, traceID, keepAlias)
 		}

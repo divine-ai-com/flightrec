@@ -522,3 +522,49 @@ func TestRecoverMarksRecordsTooLargeToJournal(t *testing.T) {
 		t.Errorf("summary %v", sum)
 	}
 }
+
+// TestRecoveryLabelsAdoptedAndExplicitScopes checks that recovery labels
+// records as a live flush would: an explicit trace ID is kept even when
+// records carry a span's trace, and an adopted trace ID is used with the
+// header ID as flightrec.request_id.
+func TestRecoveryLabelsAdoptedAndExplicitScopes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "j")
+	span := TraceContext{TraceID: [16]byte{0xab, 0xcd}, SpanID: [8]byte{1}}
+	r := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug,
+		TraceExtractor: func(ctx context.Context) TraceContext {
+			if ctx.Value(spanKey{}) != nil {
+				return span
+			}
+			return TraceContext{}
+		}})
+	if _, err := r.StartJournal(path, WithJournalSize(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(r)
+	jctx, _ := StartScope(context.Background(), r, ScopeMeta{TraceID: "job-123"})
+	log.DebugContext(context.WithValue(jctx, spanKey{}, true), "job step")
+
+	hctx, hs := startScope(context.Background(), r, ScopeMeta{TraceID: "req-W"}, idHeader)
+	hs.AdoptGeneratedTraceID(span.TraceIDHex())
+	log.DebugContext(hctx, "request step")
+	crash(t, r)
+
+	var out lineBuffer
+	if _, err := recoverInto(t, path, slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range out.lines(t) {
+		switch l["msg"] {
+		case "job step":
+			if l["flightrec.trace_id"] != "job-123" {
+				t.Errorf("explicit scope relabelled: %v", l)
+			}
+		case "request step":
+			if l["flightrec.trace_id"] != span.TraceIDHex() || l["flightrec.request_id"] != "req-W" {
+				t.Errorf("adopted scope: %v", l)
+			}
+		}
+	}
+}
+
+type spanKey struct{}

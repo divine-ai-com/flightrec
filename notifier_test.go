@@ -374,7 +374,7 @@ func TestAdoptedHeaderIDStaysAnAlias(t *testing.T) {
 		serve(b, "req-T", http.StatusOK)
 		failRequest(c, "req-T")
 		eventually(t, "b to flush its retained scope", func() bool { return b.rec.Stats().RemoteFlushes == 1 })
-		if out := b.out.String(); !strings.Contains(out, "remote:http_502") || !strings.Contains(out, spanTrace) {
+		if out := b.out.String(); !strings.Contains(out, "remote:http_502") || !strings.Contains(out, spanTrace) || !strings.Contains(out, `"flightrec.request_id":"req-T"`) {
 			t.Errorf("b output:\n%s", out)
 		}
 	})
@@ -403,4 +403,44 @@ func TestExplicitTraceIDIsNeverAdopted(t *testing.T) {
 	if _, ok := gen.AdoptGeneratedTraceID(id); ok {
 		t.Error("adopting the same ID reported a change")
 	}
+}
+
+// TestAliasRetainedCap checks that the per-trace cap of retained scopes holds
+// for a forwarded request ID shared by many scopes with their own span traces.
+func TestAliasRetainedCap(t *testing.T) {
+	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug, Retain: time.Minute})
+	log := slog.New(rec)
+	for i := range 20 {
+		h := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			flightrec.ScopeFromContext(r.Context()).AdoptGeneratedTraceID(strconv.FormatInt(int64(0x1000000000000000+i), 16) + "0000000000000000")
+			log.DebugContext(r.Context(), "x")
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Request-Id", "req-same")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	if n := rec.FlushTrace(context.Background(), "req-same", "test"); n != 8 {
+		t.Errorf("FlushTrace(alias) wrote %d scopes, want the cap of 8", n)
+	}
+}
+
+func TestChildScopeInheritsAlias(t *testing.T) {
+	bus := memnotifier.New()
+	b := newNode(t, bus, flightrec.Options{})
+	c := newNode(t, bus, flightrec.Options{})
+	listening(t, bus, 2)
+	done := make(chan struct{})
+	h := flightrec.HTTPMiddleware(b.rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flightrec.ScopeFromContext(r.Context()).AdoptGeneratedTraceID("4bf92f3577b34da6a3ce929d0e0e4736")
+		ctx, child := flightrec.StartScope(r.Context(), b.rec, flightrec.ScopeMeta{})
+		b.log.DebugContext(ctx, "child work")
+		failRequest(c, "req-V")
+		eventually(t, "the child to be triggered", func() bool { ok, _ := child.TriggerState(); return ok })
+		child.End(ctx, 200)
+		close(done)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", "req-V")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	<-done
 }

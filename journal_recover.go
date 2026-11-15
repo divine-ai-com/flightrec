@@ -76,8 +76,10 @@ func (st *recorderState) recoverFile(path string) error {
 type recoveredScope struct {
 	id      uint64
 	start   scopeStart
-	started bool // the start entry survived
-	dropped int  // records too large to journal
+	started bool   // the start entry survived
+	dropped int    // records too large to journal
+	rekeyed string // trace ID adopted after the start, if any
+	alias   string // header ID kept as an alias by that adoption
 	records []journalRecord
 }
 
@@ -155,6 +157,13 @@ func (st *recorderState) recoverJournal(path string) {
 				sc.start, sc.started = s, true
 			case journal.KindDropped:
 				sc.dropped++
+			case journal.KindRekey:
+				tid, alias, err := decodeScopeRekey(e.Payload)
+				if err != nil {
+					st.journalCorrupt.Add(1)
+					return
+				}
+				sc.rekeyed, sc.alias = tid, alias
 			case journal.KindRecord:
 				jr, err := decodeJournalRecord(e.Payload)
 				if err != nil {
@@ -180,13 +189,16 @@ func (st *recorderState) recoverJournal(path string) {
 // summary.
 func (st *recorderState) recoverScope(sc *recoveredScope, host string, processStart time.Time) {
 	traceID := sc.start.traceID
-	// The records' own trace context wins over the start entry: it reflects
-	// a span's trace adopted after the scope started (Scope.AdoptGeneratedTraceID),
-	// and it survives when the start entry was overwritten.
-	for i := len(sc.records) - 1; i >= 0; i-- {
-		if tc := sc.records[i].traceCtx; tc.HasTraceID() {
-			traceID = tc.TraceIDHex()
-			break
+	if sc.rekeyed != "" {
+		traceID = sc.rekeyed // adopted a span's trace after it started
+	}
+	if traceID == "" {
+		// The start entry was overwritten: take the trace from a record.
+		for _, jr := range sc.records {
+			if jr.traceCtx.HasTraceID() {
+				traceID = jr.traceCtx.TraceIDHex()
+				break
+			}
 		}
 	}
 	scopeTrace, hasScopeTrace := ParseTraceIDHex(traceID)
@@ -198,6 +210,9 @@ func (st *recorderState) recoverScope(sc *recoveredScope, host string, processSt
 	if traceID == "" {
 		// Nothing else tells apart the records of scopes without a trace.
 		recovered = append(recovered, slog.Uint64("flightrec.recovered_scope", sc.id))
+	}
+	if sc.alias != "" {
+		recovered = append(recovered, slog.String("flightrec.request_id", sc.alias))
 	}
 
 	written := 0

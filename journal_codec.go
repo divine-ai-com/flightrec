@@ -42,6 +42,23 @@ func decodeScopeStart(b []byte) (scopeStart, error) {
 	return s, d.err
 }
 
+// appendScopeRekey encodes a rekey entry: the adopted trace ID and the alias
+// kept for the old one (empty for a generated ID).
+func appendScopeRekey(b []byte, traceID, alias string) []byte {
+	b = append(b, journalPayloadVersion)
+	b = appendJString(b, traceID)
+	return appendJString(b, alias)
+}
+
+func decodeScopeRekey(b []byte) (traceID, alias string, err error) {
+	d := decoder{b: b}
+	if d.byte() != journalPayloadVersion {
+		return "", "", errBadPayload
+	}
+	traceID, alias = d.string(), d.string()
+	return traceID, alias, d.err
+}
+
 // journalRecord is the payload of a journal record entry: what a flush would
 // write, with the child logger's attributes and groups kept apart so the
 // output can be rebuilt by buildOutputRecord.

@@ -627,9 +627,12 @@ const (
 // later (Scope.AdoptGeneratedTraceID); a header ID is kept as an alias.
 func startScope(ctx context.Context, rec *Recorder, meta ScopeMeta, source traceIDSource) (context.Context, *Scope) {
 	st := rec.state
+	var alias string
 	if meta.TraceID == "" {
 		if sc := scopeFromContext(ctx); sc != nil {
-			meta.TraceID = sc.TraceID()
+			sc.mu.Lock()
+			meta.TraceID, alias = sc.meta.TraceID, sc.aliasTraceID
+			sc.mu.Unlock()
 		} else if tc := st.extractTraceContext(ctx); tc.HasTraceID() {
 			meta.TraceID = tc.TraceIDHex()
 		}
@@ -639,10 +642,11 @@ func startScope(ctx context.Context, rec *Recorder, meta ScopeMeta, source trace
 		source = idGenerated
 	}
 	sc := &Scope{
-		state:     st,
-		meta:      meta,
-		startTime: st.now(),
-		idSource:  source,
+		state:        st,
+		meta:         meta,
+		startTime:    st.now(),
+		idSource:     source,
+		aliasTraceID: alias,
 	}
 	st.activeScopes.Add(1)
 	st.scopesStarted.Add(1)
@@ -651,6 +655,9 @@ func startScope(ctx context.Context, rec *Recorder, meta ScopeMeta, source trace
 	st.notifyScopeStart(scopeCtx, sc, meta.TraceID)
 	if h := st.hub.Load(); h != nil {
 		h.scopeStarted(sc, meta.TraceID)
+		if alias != "" {
+			h.scopeStarted(sc, alias)
+		}
 	}
 	return scopeCtx, sc
 }
@@ -1001,7 +1008,7 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 
 	if triggered {
 		st.scopesFlushed.Add(1)
-		st.writeFlushed(ctx, entries, traceID, reason, truncated, droppedInScope)
+		st.writeFlushed(ctx, entries, traceID, alias, reason, truncated, droppedInScope)
 		// After the records reached Next: a crash while writing them
 		// recovers them again rather than losing them.
 		st.journalEnd(s)
@@ -1050,6 +1057,9 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 		}
 		if retain {
 			summary.AddAttrs(slog.Int("flightrec.retained_records", retainedCount))
+		}
+		if alias != "" {
+			summary.AddAttrs(slog.String("flightrec.request_id", alias))
 		}
 		summaryCtx := ctx
 		if tc := st.extractTraceContext(ctx); !tc.HasTraceID() && hasScopeTraceBytes {
