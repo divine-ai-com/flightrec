@@ -202,6 +202,23 @@ type Stats struct {
 	// NotifierSubscribeErrors counts Notifier.Subscribe calls that failed
 	// and were retried.
 	NotifierSubscribeErrors uint64
+
+	// JournalRecordsWritten counts buffered records written to the journal
+	// started with StartJournal; JournalBytesWritten counts all journal
+	// bytes, start and end entries included.
+	JournalRecordsWritten uint64
+	JournalBytesWritten   uint64
+	// JournalWraps counts times the journal ring reused its oldest block.
+	JournalWraps uint64
+	// JournalDropped counts entries not written: larger than a journal
+	// block, or written after a fault disabled the journal.
+	JournalDropped uint64
+	// JournalFaults counts memory faults on the journal file (for example
+	// after it was truncated or the disk failed); the journal stops after one.
+	JournalFaults uint64
+	// JournalOldestAge is the time span the journal currently covers: older
+	// records have been overwritten.
+	JournalOldestAge time.Duration
 }
 
 type groupFrame struct {
@@ -256,6 +273,10 @@ type recorderState struct {
 	notifierDeliveryDropped   atomic.Uint64
 	notifierRejected          atomic.Uint64
 	notifierSubscribeErrors   atomic.Uint64
+
+	journal    atomic.Pointer[journalState]
+	journalMu  sync.Mutex // serializes StartJournal and stop
+	journalIDs atomic.Uint64
 
 	hub   atomic.Pointer[notifierHub]
 	hubMu sync.Mutex // serializes StartNotifier and stop
@@ -391,6 +412,7 @@ func (r *Recorder) Stats() Stats {
 		NotifierSubscribeErrors:   st.notifierSubscribeErrors.Load(),
 	}
 	stats.RetainedScopes, stats.RetainedBytes, stats.RetainedOldestAge = retainedScopes, retainedBytes, retainedOldest
+	st.journalStats(&stats)
 	return stats
 }
 
@@ -438,6 +460,9 @@ func (r *Recorder) Handle(ctx context.Context, rec slog.Record) error {
 		st.recordsPassedThrough.Add(1)
 		outRec := r.buildOutputRecord(cloned, sc.TraceID(), tc.SpanIDHex(), "", false, 0)
 		return st.baseNext.Handle(ctx, outRec)
+	}
+	if sc.journal != nil {
+		st.journalRecord(sc, r, cloned, tc)
 	}
 	return nil
 }
@@ -534,7 +559,12 @@ type Scope struct {
 	evictedByTotalCap bool
 	droppedInScope    uint64
 	generatedTraceID  bool
-	closed            bool
+
+	// jid and journal are set at StartScope when a journal is running and
+	// never change afterwards.
+	jid     uint64
+	journal *journalState
+	closed  bool
 
 	// Doubly-linked list pointers guarded by state.listMu.
 	prev   *Scope
@@ -569,6 +599,7 @@ func StartScope(ctx context.Context, rec *Recorder, meta ScopeMeta) (context.Con
 	}
 	st.activeScopes.Add(1)
 	st.scopesStarted.Add(1)
+	st.journalStart(sc)
 	scopeCtx := context.WithValue(ctx, scopeContextKey{}, sc)
 	st.notifyScopeStart(scopeCtx, sc, meta.TraceID)
 	if h := st.hub.Load(); h != nil {
@@ -914,9 +945,13 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	if triggered {
 		st.scopesFlushed.Add(1)
 		st.writeFlushed(ctx, entries, traceID, reason, truncated, droppedInScope)
+		// After the records reached Next: a crash while writing them
+		// recovers them again rather than losing them.
+		st.journalEnd(s)
 		st.notifyScopeEnd(s, traceID, true, reason)
 		return
 	}
+	st.journalEnd(s)
 
 	droppedCount := uint64(healthyDropped) + droppedInScope
 	retainedCount := len(entries)
