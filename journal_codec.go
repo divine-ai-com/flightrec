@@ -5,6 +5,7 @@ package flightrec
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"math"
@@ -113,6 +114,10 @@ func decodeJournalRecord(b []byte) (journalRecord, error) {
 	return jr, d.err
 }
 
+// maxJournalValue bounds the two renderings of a slog.Any value in a journal
+// record together, so a record with one large value still fits an entry.
+const maxJournalValue = 32 << 10
+
 // Attribute value tags. They match neither slog.Kind values nor any order.
 const (
 	tagString byte = iota + 1
@@ -123,7 +128,8 @@ const (
 	tagDuration
 	tagTime
 	tagGroup
-	tagJSON
+	tagJSON     // JSON only: written by v0.4 and v0.5
+	tagSnapshot // JSON and text renderings of a slog.Any value
 )
 
 func appendJString(b []byte, s string) []byte {
@@ -193,12 +199,23 @@ func appendJAttr(b []byte, a slog.Attr, depth int) []byte {
 		// slog.Any: the same copy retention takes. Errors and values JSON
 		// cannot encode come back as strings; the rest is JSON text.
 		sv := snapshotAny(v.Any())
-		if sv.Kind() == slog.KindString {
-			b = append(b, tagString)
+		if s, ok := sv.Any().(snapshotValue); ok {
+			// Both renderings must fit one journal entry: drop the text
+			// first (text handlers then print the JSON), then the JSON.
+			if len(s.raw)+len(s.text) > maxJournalValue {
+				s.text = string(s.raw)
+				if 2*len(s.raw) > maxJournalValue {
+					s.raw, _ = json.Marshal(snapshotTruncated)
+					s.text = snapshotTruncated
+				}
+			}
+			b = append(b, tagSnapshot)
+			b = appendJString(b, string(s.raw))
+			b = appendJString(b, s.text)
 		} else {
-			b = append(b, tagJSON)
+			b = append(b, tagString)
+			b = appendJString(b, sv.String())
 		}
-		b = appendJString(b, sv.String())
 	}
 	return b
 }
@@ -324,7 +341,11 @@ func (d *decoder) attrs(depth int) []slog.Attr {
 		case tagGroup:
 			v = slog.GroupValue(d.attrs(depth + 1)...)
 		case tagJSON:
-			v = slog.AnyValue(snapshotValue{raw: []byte(d.string())})
+			raw := d.string()
+			v = slog.AnyValue(snapshotValue{raw: []byte(raw), text: raw})
+		case tagSnapshot:
+			raw := d.string()
+			v = slog.AnyValue(snapshotValue{raw: []byte(raw), text: d.string()})
 		default:
 			d.fail()
 		}
