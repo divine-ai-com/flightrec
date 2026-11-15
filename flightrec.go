@@ -133,6 +133,13 @@ type Stats struct {
 	// FlushMarkersMissed counts triggered scopes whose response headers were
 	// already written, so the Flightrec-Flush header could not be added.
 	FlushMarkersMissed uint64
+	// DownstreamTriggers counts open scopes that a FlushHeader on a response
+	// read through NewTransport triggered. Responses for scopes that were
+	// already triggered or had ended are not counted.
+	DownstreamTriggers uint64
+	// MarkersRejected counts FlushHeader values from responses that were not
+	// a built-in reason and were ignored.
+	MarkersRejected uint64
 }
 
 type groupFrame struct {
@@ -175,6 +182,8 @@ type recorderState struct {
 	recordsDroppedTotalCap    atomic.Uint64
 	flushMarkersSent          atomic.Uint64
 	flushMarkersMissed        atomic.Uint64
+	downstreamTriggers        atomic.Uint64
+	markersRejected           atomic.Uint64
 
 	listMu sync.Mutex
 	oldest *Scope
@@ -285,6 +294,8 @@ func (r *Recorder) Stats() Stats {
 		RecordsDroppedTotalCap:    st.recordsDroppedTotalCap.Load(),
 		FlushMarkersSent:          st.flushMarkersSent.Load(),
 		FlushMarkersMissed:        st.flushMarkersMissed.Load(),
+		DownstreamTriggers:        st.downstreamTriggers.Load(),
+		MarkersRejected:           st.markersRejected.Load(),
 	}
 }
 
@@ -505,6 +516,12 @@ func scopeFromContext(ctx context.Context) *Scope {
 
 // Trigger marks the scope to be flushed on End. The first non-empty reason is kept.
 func (s *Scope) Trigger(reason string) {
+	s.trigger(reason)
+}
+
+// trigger marks the scope as triggered and reports whether this call changed
+// an open, untriggered scope.
+func (s *Scope) trigger(reason string) bool {
 	if reason == "" {
 		reason = "triggered"
 	}
@@ -522,6 +539,7 @@ func (s *Scope) Trigger(reason string) {
 	if notify && s.state != nil {
 		s.state.notifyScopeTrigger(s, tid, reason)
 	}
+	return notify
 }
 
 // triggerIfSlow triggers the scope with reason slow_request if it has run for
