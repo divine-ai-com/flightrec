@@ -4,6 +4,12 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Added
+- `HTTPMiddleware` sets the `Flightrec-Flush` response header (`flightrec.FlushHeader`) with the flush reason when a scope is triggered before its headers are written, so callers can keep their own logs for the same request. The header is removed from incoming requests, so a client cannot force a flush. `Stats` gains `FlushMarkersSent` and `FlushMarkersMissed` (#39).
+
+### Fixed
+- An informational response such as `103 Early Hints` no longer becomes the recorded status of the request; the final status is used for the 5xx trigger and the summary line.
+
 ## [grpcflightrec/v0.2.1, otelflightrec/v0.2.1] - 2026-11-15
 
 The core module is unchanged at `v0.2.0`.

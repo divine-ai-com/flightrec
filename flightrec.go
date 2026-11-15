@@ -121,6 +121,13 @@ type Stats struct {
 	RecordsHealthyDropped     uint64
 	RecordsDroppedPerScopeCap uint64
 	RecordsDroppedTotalCap    uint64
+
+	// FlushMarkersSent counts responses that carried the Flightrec-Flush
+	// header because their scope was triggered before headers were written.
+	FlushMarkersSent uint64
+	// FlushMarkersMissed counts triggered scopes whose response headers were
+	// already written, so the Flightrec-Flush header could not be added.
+	FlushMarkersMissed uint64
 }
 
 type groupFrame struct {
@@ -161,6 +168,8 @@ type recorderState struct {
 	recordsHealthyDropped     atomic.Uint64
 	recordsDroppedPerScopeCap atomic.Uint64
 	recordsDroppedTotalCap    atomic.Uint64
+	flushMarkersSent          atomic.Uint64
+	flushMarkersMissed        atomic.Uint64
 
 	listMu sync.Mutex
 	oldest *Scope
@@ -269,6 +278,8 @@ func (r *Recorder) Stats() Stats {
 		RecordsHealthyDropped:     st.recordsHealthyDropped.Load(),
 		RecordsDroppedPerScopeCap: st.recordsDroppedPerScopeCap.Load(),
 		RecordsDroppedTotalCap:    st.recordsDroppedTotalCap.Load(),
+		FlushMarkersSent:          st.flushMarkersSent.Load(),
+		FlushMarkersMissed:        st.flushMarkersMissed.Load(),
 	}
 }
 

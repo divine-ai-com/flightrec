@@ -12,8 +12,25 @@ import (
 	"strings"
 )
 
+// FlushHeader is the response header a triggered scope sets so that callers
+// can flush their own buffers for the same request. Its value is the flush
+// reason. See Transport.
+//
+// HTTPMiddleware removes FlushHeader from incoming requests before the handler
+// runs: only responses from services you call can trigger a flush, never a
+// request from a client.
+const FlushHeader = "Flightrec-Flush"
+
+// maxFlushReasonLen bounds the length of the FlushHeader value.
+const maxFlushReasonLen = 64
+
 // HTTPMiddleware wraps an http.Handler and opens a flight-recorder Scope for
 // every incoming request.
+//
+// When the scope is triggered before the response headers are written, or
+// the handler writes a status of 500 or above, the response carries
+// FlushHeader with the flush reason. A scope triggered after the headers are
+// written cannot add it; Stats.FlushMarkersMissed counts those.
 //
 // The scope is keyed by the request's trace ID (extracted from W3C traceparent,
 // X-Trace-Id, or X-Request-Id headers, or generated when absent). The buffer
@@ -29,7 +46,8 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 				Method:  r.Method,
 				Path:    r.URL.Path,
 			})
-			rw, sw := wrapResponseWriter(w)
+			r.Header.Del(FlushHeader)
+			rw, sw := wrapResponseWriter(w, sc)
 
 			defer func() {
 				if p := recover(); p != nil {
@@ -41,6 +59,7 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 					sc.End(ctx, http.StatusInternalServerError)
 					panic(p)
 				}
+				sw.finish()
 				sc.End(ctx, sw.status)
 			}()
 
@@ -90,23 +109,88 @@ func parseW3CTraceparent(tp string) string {
 
 type statusResponseWriter struct {
 	http.ResponseWriter
+	scope       *Scope
 	status      int
 	wroteHeader bool
+	markerSent  bool
+	hijacked    bool
+}
+
+// beforeHeaders runs once, just before the final response headers are sent.
+// It triggers the scope for a 5xx status and sets FlushHeader when the scope
+// is triggered.
+func (w *statusResponseWriter) beforeHeaders(code int) {
+	w.status = code
+	w.wroteHeader = true
+	if w.scope == nil {
+		return
+	}
+	if code >= 500 {
+		w.scope.Trigger(httpStatusReason(code))
+	}
+	if triggered, reason := w.scope.TriggerState(); triggered {
+		w.Header().Set(FlushHeader, sanitizeFlushReason(reason))
+		w.markerSent = true
+		w.scope.state.flushMarkersSent.Add(1)
+	}
+}
+
+// finish runs after the handler returns normally. If the handler wrote
+// nothing, net/http sends the headers after this point, so the marker can
+// still be added. Otherwise a triggered scope without a marker is counted as
+// missed.
+func (w *statusResponseWriter) finish() {
+	if w.scope == nil || w.hijacked {
+		return
+	}
+	if !w.wroteHeader {
+		w.beforeHeaders(w.status)
+		return
+	}
+	if triggered, _ := w.scope.TriggerState(); triggered && !w.markerSent {
+		w.scope.state.flushMarkersMissed.Add(1)
+	}
 }
 
 func (w *statusResponseWriter) WriteHeader(code int) {
+	// Informational responses (1xx except 101 Switching Protocols) are sent
+	// ahead of the final response and do not fix its status or headers.
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if !w.wroteHeader {
-		w.status = code
-		w.wroteHeader = true
+		w.beforeHeaders(code)
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *statusResponseWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
-		w.wroteHeader = true
+		w.beforeHeaders(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(b)
+}
+
+// sanitizeFlushReason limits a flush reason to characters that are safe in a
+// header value and to maxFlushReasonLen bytes.
+func sanitizeFlushReason(reason string) string {
+	if len(reason) > maxFlushReasonLen {
+		reason = reason[:maxFlushReasonLen]
+	}
+	b := []byte(reason)
+	for i, c := range b {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '_', c == '-', c == '.', c == ':':
+		default:
+			b[i] = '_'
+		}
+	}
+	if len(b) == 0 {
+		return "triggered"
+	}
+	return string(b)
 }
 
 func (w *statusResponseWriter) Unwrap() http.ResponseWriter {
@@ -114,21 +198,31 @@ func (w *statusResponseWriter) Unwrap() http.ResponseWriter {
 }
 
 func (w *statusResponseWriter) flush() {
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
+	f, ok := w.ResponseWriter.(http.Flusher)
+	if !ok {
+		return
 	}
+	// Flushing before any write sends a 200 status with the current headers.
+	if !w.wroteHeader {
+		w.beforeHeaders(http.StatusOK)
+	}
+	f.Flush()
 }
 
 func (w *statusResponseWriter) hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
-		return hj.Hijack()
+		conn, rw, err := hj.Hijack()
+		if err == nil {
+			w.hijacked = true
+		}
+		return conn, rw, err
 	}
 	return nil, nil, http.ErrNotSupported
 }
 
 func (w *statusResponseWriter) readFrom(r io.Reader) (int64, error) {
 	if !w.wroteHeader {
-		w.wroteHeader = true
+		w.beforeHeaders(http.StatusOK)
 	}
 	return w.ResponseWriter.(io.ReaderFrom).ReadFrom(r)
 }
@@ -168,9 +262,10 @@ func (w *rwFlusherHijackerReaderFrom) Hijack() (net.Conn, *bufio.ReadWriter, err
 }
 func (w *rwFlusherHijackerReaderFrom) ReadFrom(r io.Reader) (int64, error) { return w.readFrom(r) }
 
-func wrapResponseWriter(w http.ResponseWriter) (http.ResponseWriter, *statusResponseWriter) {
+func wrapResponseWriter(w http.ResponseWriter, sc *Scope) (http.ResponseWriter, *statusResponseWriter) {
 	base := statusResponseWriter{
 		ResponseWriter: w,
+		scope:          sc,
 		status:         http.StatusOK,
 	}
 	_, hasFlusher := w.(http.Flusher)
