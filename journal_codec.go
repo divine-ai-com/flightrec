@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"math"
 	"time"
+
+	"github.com/divine-ai-com/flightrec/internal/snapshot"
 )
 
 // Journal payload encoding. Private: it may change in any release, and the
@@ -198,20 +200,21 @@ func appendJAttr(b []byte, a slog.Attr, depth int) []byte {
 	default:
 		// slog.Any: the same copy retention takes. Errors and values JSON
 		// cannot encode come back as strings; the rest is JSON text.
-		sv := snapshotAny(v.Any())
-		if s, ok := sv.Any().(snapshotValue); ok {
+		sv := snapshot.Of(v.Any())
+		if s, ok := sv.Any().(snapshot.Value); ok {
+			raw, text := snapshot.Parts(s)
 			// Both renderings must fit one journal entry: drop the text
 			// first (text handlers then print the JSON), then the JSON.
-			if len(s.raw)+len(s.text) > maxJournalValue {
-				s.text = string(s.raw)
-				if 2*len(s.raw) > maxJournalValue {
-					s.raw, _ = json.Marshal(snapshotTruncated)
-					s.text = snapshotTruncated
+			if len(raw)+len(text) > maxJournalValue {
+				text = string(raw)
+				if 2*len(raw) > maxJournalValue {
+					raw, _ = json.Marshal(snapshot.Truncated)
+					text = snapshot.Truncated
 				}
 			}
 			b = append(b, tagSnapshot)
-			b = appendJString(b, string(s.raw))
-			b = appendJString(b, s.text)
+			b = appendJString(b, string(raw))
+			b = appendJString(b, text)
 		} else {
 			b = append(b, tagString)
 			b = appendJString(b, sv.String())
@@ -342,10 +345,10 @@ func (d *decoder) attrs(depth int) []slog.Attr {
 			v = slog.GroupValue(d.attrs(depth + 1)...)
 		case tagJSON:
 			raw := d.string()
-			v = slog.AnyValue(snapshotValue{raw: []byte(raw), text: raw})
+			v = slog.AnyValue(snapshot.Make([]byte(raw), raw))
 		case tagSnapshot:
 			raw := d.string()
-			v = slog.AnyValue(snapshotValue{raw: []byte(raw), text: d.string()})
+			v = slog.AnyValue(snapshot.Make([]byte(raw), d.string()))
 		default:
 			d.fail()
 		}

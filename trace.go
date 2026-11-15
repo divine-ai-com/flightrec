@@ -5,30 +5,9 @@ package flightrec
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"encoding/hex"
-	mrand "math/rand/v2"
-	"sync"
 	"sync/atomic"
 )
-
-var rngPool = sync.Pool{
-	New: func() any {
-		var seed [32]byte
-		_, _ = rand.Read(seed[:])
-		return mrand.NewChaCha8(seed)
-	},
-}
-
-func generateTraceID() string {
-	ch := rngPool.Get().(*mrand.ChaCha8)
-	var b [16]byte
-	binary.LittleEndian.PutUint64(b[:8], ch.Uint64())
-	binary.LittleEndian.PutUint64(b[8:16], ch.Uint64())
-	rngPool.Put(ch)
-	return hex.EncodeToString(b[:])
-}
 
 // TraceContext holds a W3C 16-byte TraceID, 8-byte SpanID, and trace flags
 // extracted from a context.Context at log or scope-start time.
