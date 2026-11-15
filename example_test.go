@@ -12,10 +12,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/divine-ai-com/flightrec"
+	"github.com/divine-ai-com/flightrec/notifier/memnotifier"
 )
 
 func ExampleNew() {
@@ -142,4 +145,78 @@ func ExampleInvokeGRPCUnary() {
 	fmt.Printf("trace=%v msg=%q reason=%v\n", m["flightrec.trace_id"], m["msg"], m["flightrec.flush_reason"])
 	// Output:
 	// trace=grpc-1 msg="validating card" reason=grpc_error
+}
+
+// A service that called a failing service keeps its own logs for the request:
+// the response's Flightrec-Flush header triggers the caller's scope.
+func ExampleNewTransport() {
+	downstream := httptest.NewServer(flightrec.HTTPMiddleware(flightrec.New(flightrec.Options{Next: slog.DiscardHandler}))(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })))
+	defer downstream.Close()
+
+	var buf bytes.Buffer
+	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(&buf, nil), BufferLeveler: slog.LevelDebug})
+	client := &http.Client{Transport: flightrec.NewTransport(http.DefaultTransport)}
+
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "req-1"})
+	slog.New(rec).DebugContext(ctx, "calling inventory")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, downstream.URL, nil)
+	if resp, err := client.Do(req); err == nil {
+		_ = resp.Body.Close()
+	}
+	sc.End(ctx, http.StatusOK) // this service answered 200, but kept its logs
+
+	var m map[string]any
+	_ = json.Unmarshal(buf.Bytes(), &m)
+	fmt.Println(m["msg"], m["flightrec.flush_reason"])
+	// Output: calling inventory downstream:http_503
+}
+
+// With Retain, a healthy request's logs are kept for a while; FlushTrace
+// writes them when a failure elsewhere turns out to belong to the same trace.
+func ExampleRecorder_FlushTrace() {
+	var buf bytes.Buffer
+	rec := flightrec.New(flightrec.Options{
+		Next:                  slog.NewJSONHandler(&buf, nil),
+		BufferLeveler:         slog.LevelDebug,
+		Retain:                30 * time.Second,
+		DisableHealthySummary: true,
+	})
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "req-7"})
+	slog.New(rec).DebugContext(ctx, "queued confirmation email")
+	sc.End(ctx, http.StatusOK)
+
+	n := rec.FlushTrace(context.Background(), "req-7", "payment reversed")
+	var m map[string]any
+	_ = json.Unmarshal(buf.Bytes(), &m)
+	fmt.Println(n, m["msg"], m["flightrec.flush_reason"])
+	// Output: 1 queued confirmation email payment reversed
+}
+
+// Services connected through a notifier keep each other's logs: a failure in
+// one flushes the retained logs of the others for the same trace. Sign the
+// messages with a key every service shares.
+func ExampleRecorder_StartNotifier() {
+	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(os.Stdout, nil), Retain: 30 * time.Second})
+	bus := memnotifier.New() // redisnotifier or natsnotifier across processes
+	key := []byte(os.Getenv("FLIGHTREC_NOTIFIER_KEY"))
+	if len(key) < 32 {
+		key = bytes.Repeat([]byte("k"), 32) // example only: use 32 random bytes
+	}
+	stop := rec.StartNotifier(context.Background(), bus, flightrec.WithSigningKey(key))
+	defer stop()
+}
+
+// A journal on a volume that outlives the process lets the next start write
+// the debug logs of requests that were in flight when the process was killed.
+func ExampleRecorder_StartJournal() {
+	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(os.Stdout, nil)})
+	stop, err := rec.StartJournal(filepath.Join(os.TempDir(), "flightrec.journal"))
+	if errors.Is(err, flightrec.ErrJournalUnsupported) {
+		return // Windows: run without a journal
+	}
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = stop() }() // after the server has drained its requests
 }
