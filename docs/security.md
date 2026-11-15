@@ -27,15 +27,22 @@ key := []byte(os.Getenv("FLIGHTREC_NOTIFIER_KEY")) // at least 32 random bytes, 
 stop := rec.StartNotifier(ctx, n, flightrec.WithSigningKey(key))
 ```
 
-- Messages are signed with HMAC-SHA256 and a timestamp; unsigned, forged and messages older than two minutes are dropped and counted in `Stats().NotifierRejected`. To rotate, sign with the new key and pass the old one as `verifyAlso` until every service runs the new key.
-- Give the channel its own credentials: a Redis ACL user limited to the channel (`&flightrec:prod` with `+publish +subscribe`), or NATS publish and subscribe permissions on the subject, over TLS. Read credentials from the environment or a secret store.
+- Messages are signed with HMAC-SHA256 and a timestamp; unsigned, forged and messages older than two minutes are dropped and counted in `Stats().NotifierRejected`. Use 32 random bytes, not a 32-character password.
+- Signed and unsigned services reject each other's messages, so turn signing on for every service of a channel in one deploy. To rotate keys with rolling deploys, roll out each step everywhere before the next: `WithSigningKey(old, new)`, then `WithSigningKey(new, old)`, then `WithSigningKey(new)`.
+- Give the channel its own credentials, over TLS, read from the environment or a secret store. For Redis, an ACL user limited to the channel; `+ping` is needed for the notifier's health checks:
+
+  ```
+  ACL SETUSER flightrec on >PASSWORD resetchannels &flightrec:prod +publish +subscribe +ping
+  ```
+
+  For NATS, publish and subscribe permissions on the notifier's subject only.
 
 ## Sensitive data in logs
 
 flightrec writes what your code logs, through the handler you pass as `Next`, so redaction you do there (`HandlerOptions.ReplaceAttr`, `slog.LogValuer` on your types) applies to flushed records as it does to any other. Two features copy values instead of keeping references:
 
-- `Retain` and `StartJournal` copy `slog.Any` values. The copy renders as the original would: JSON for JSON handlers (`MarshalJSON` is honoured), and `MarshalText` or `String` for text handlers, so types that redact themselves in those methods stay redacted. A type that redacts only in `String` is still written in full by `slog.JSONHandler`, with or without flightrec; implement `slog.LogValuer` or `MarshalJSON` for redaction that holds everywhere.
-- Copies are capped at 64 KB per value, and copying for `Retain` stops once a request's copies exceed `MaxRetained`.
+- `Retain` and `StartJournal` copy `slog.Any` values. The copy keeps two renderings made as slog's handlers make them: JSON for JSON handlers (`MarshalJSON` is honoured), and text for text handlers (`MarshalText`, else `Format`, `Error` or `String`), so types that redact themselves in those methods stay redacted. A type that redacts only in `String` is still written in full by `slog.JSONHandler`, with or without flightrec; implement `slog.LogValuer` or `MarshalJSON` for redaction that holds everywhere.
+- Each rendering of a copy is capped at 64 KB (32 KB for both together in the journal), and copying for `Retain` stops once a request's copies exceed `MaxRetained`.
 
 Do not change a map that was logged with `slog.Any` from another goroutine while the request runs: the handler (or the copy taken for `Retain`) reads it when the request ends, and a concurrent write makes the Go runtime abort the process.
 
