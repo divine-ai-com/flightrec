@@ -4,6 +4,12 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-11-15
+
+Cross-service flush: a failure in one service keeps the logs of the other services that handled the same request (proposal 0001).
+
+Modules released: core `v0.3.0`, `grpcflightrec/v0.3.0`, and the new `notifier/redisnotifier/v0.3.0` and `notifier/natsnotifier/v0.3.0`. `otelflightrec` is unchanged at `v0.2.1`.
+
 ### Changed
 - Trace ID headers with whitespace, quotes, control characters, non-ASCII bytes or more than 128 bytes are no longer used; such requests get a generated trace ID instead. IDs such as UUIDs, ULIDs, base64 and `host/sequence` request IDs are unaffected (#49).
 

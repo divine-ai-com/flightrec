@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | Accepted (#33), revised after design review (#48) |
+| Status | Implemented in v0.3.0 (#33, #48) |
 | Milestone | v0.3.0 |
 | Scope | core module, `grpcflightrec`, two new notifier modules |
 
