@@ -285,7 +285,9 @@ func (sp *SpanProcessor) TriggerContext(ctx context.Context, reason string) {
 // OnStart implements sdktrace.SpanProcessor.
 func (sp *SpanProcessor) OnStart(parent context.Context, s sdktrace.ReadWriteSpan) {
 	sc := s.SpanContext()
-	if !sc.IsValid() {
+	if !sc.IsValid() || !sc.IsSampled() {
+		// Spans that are recorded but not sampled are never exported, so they
+		// are not buffered or tracked. They pass through to Next unchanged.
 		if sp.next != nil {
 			sp.next.OnStart(parent, s)
 		}
@@ -366,10 +368,10 @@ func (sp *SpanProcessor) OnStart(parent context.Context, s sdktrace.ReadWriteSpa
 // OnEnd implements sdktrace.SpanProcessor.
 func (sp *SpanProcessor) OnEnd(s sdktrace.ReadOnlySpan) {
 	sc := s.SpanContext()
-	if !sc.IsValid() {
-		return
-	}
-	if !sc.TraceFlags().IsSampled() {
+	if !sc.IsValid() || !sc.IsSampled() {
+		if sp.next != nil {
+			sp.next.OnEnd(s)
+		}
 		return
 	}
 
