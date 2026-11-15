@@ -120,7 +120,7 @@ func WithJournalSize(bytes int64) JournalOption // default 16 MiB, rounded to th
 
 - It returns an error only when no journal can run (platform, path, permissions, disk). Problems with the old file are counted in `Stats`, never returned.
 - Calling it again on the same Recorder while a journal is running returns an error.
-- `stop` stops journaling, zeros the ring and closes the file. Scopes still open at that point are recovered on the next start, since they did not finish.
+- `stop` stops journaling, zeros the ring and removes the file. Scopes still open at that point are not recovered, so `stop` belongs after the server has drained its requests. A lock file, `path.lock`, is held while the journal runs.
 - The file is created with mode `0600` and locked with `flock`; a second process or Recorder opening the same path gets an error.
 
 ### Stats

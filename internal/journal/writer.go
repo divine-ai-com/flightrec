@@ -131,7 +131,9 @@ func (w *Writer) Append(key uint64, kind Kind, scope uint64, payload []byte) boo
 	st := &w.stripes[key%uint64(len(w.stripes))]
 
 	st.mu.Lock()
-	ok := w.appendProtected(st, kind, scope, payload, n)
+	// Checked again under the lock: Close disables the Writer, then takes
+	// every stripe lock before it zeros and unmaps the memory.
+	ok := !w.disabled.Load() && w.appendProtected(st, kind, scope, payload, n)
 	st.mu.Unlock()
 	if !ok {
 		w.dropped.Add(1)
