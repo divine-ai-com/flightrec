@@ -219,7 +219,7 @@ func endTraceWithStatus(t *testing.T, status, wantSpans int) {
 	}
 	attrs := map[string]string{}
 	for _, kv := range got.Attributes {
-		attrs[string(kv.Key)] = kv.Value.Emit()
+		attrs[string(kv.Key)] = kv.Value.String()
 	}
 	if attrs["tables"] != `["orders","items"]` || attrs["ids"] != "[1,2]" || attrs["cached"] != "false" {
 		t.Errorf("child attributes = %v", attrs)
