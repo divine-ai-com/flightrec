@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,11 +93,13 @@ func TestGolden(t *testing.T) {
 			Flush(ctx, "payment mismatch")
 			sc.End(ctx, 200)
 		}},
-		{"truncated", Options{MaxPerScope: 2 << 10}, func(rec *Recorder, log *slog.Logger) {
+		// One record larger than MaxPerScope is dropped by itself; unlike
+		// filling the ring, this does not depend on the platform's slot size.
+		{"truncated", Options{MaxPerScope: 8 << 10}, func(rec *Recorder, log *slog.Logger) {
 			ctx, sc := StartScope(context.Background(), rec, ScopeMeta{TraceID: "req-5"})
-			for i := range 40 {
-				log.DebugContext(ctx, "step", "n", i)
-			}
+			log.DebugContext(ctx, "small-1")
+			log.DebugContext(ctx, "huge", "blob", strings.Repeat("x", 16<<10))
+			log.DebugContext(ctx, "small-2")
 			sc.End(ctx, 500)
 		}},
 		{"retained_flush", Options{Retain: time.Minute}, func(rec *Recorder, log *slog.Logger) {

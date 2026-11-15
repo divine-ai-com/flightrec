@@ -1,6 +1,2 @@
-{"time":"<time>","level":"DEBUG","msg":"step","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500","flightrec.truncated":true,"flightrec.dropped_records":34,"n":34}
-{"time":"<time>","level":"DEBUG","msg":"step","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500","n":35}
-{"time":"<time>","level":"DEBUG","msg":"step","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500","n":36}
-{"time":"<time>","level":"DEBUG","msg":"step","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500","n":37}
-{"time":"<time>","level":"DEBUG","msg":"step","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500","n":38}
-{"time":"<time>","level":"DEBUG","msg":"step","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500","n":39}
+{"time":"<time>","level":"DEBUG","msg":"small-1","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500","flightrec.truncated":true,"flightrec.dropped_records":1}
+{"time":"<time>","level":"DEBUG","msg":"small-2","flightrec.trace_id":"req-5","flightrec.flush_reason":"http_500"}
