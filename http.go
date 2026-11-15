@@ -75,14 +75,22 @@ func MarkerValue(reason string) (value string, ok bool) {
 // Stats.FlushMarkersMissed counts both.
 //
 // The scope is keyed by the request's trace ID (extracted from W3C traceparent,
-// X-Trace-Id, or X-Request-Id headers, or generated when absent). The buffer
+// X-Trace-Id, or X-Request-Id headers, in that order; the first valid value
+// wins). X-Trace-Id and X-Request-Id values are valid when they are 1 to 128
+// bytes of letters, digits and _ . : - / + = @. Without a valid header, the
+// trace ID comes from an active OpenTelemetry span or is generated. Services
+// that receive requests from outside your system should set
+// Options.IgnoreRequestTraceIDs. The buffer
 // is flushed if an error log is recorded, the response status is 5xx, the
 // handler panics (except http.ErrAbortHandler), the duration exceeds SlowAfter,
 // or Flush(ctx, reason) is called explicitly.
 func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			traceID := extractHTTPTraceID(r.Header)
+			var traceID string
+			if !rec.state.opts.IgnoreRequestTraceIDs {
+				traceID = extractHTTPTraceID(r.Header)
+			}
 			ctx, sc := StartScope(r.Context(), rec, ScopeMeta{
 				TraceID: traceID,
 				Method:  r.Method,
@@ -121,13 +129,39 @@ func extractHTTPTraceID(h http.Header) string {
 			return tid
 		}
 	}
-	if tid := strings.TrimSpace(h.Get("X-Trace-Id")); tid != "" {
-		return tid
-	}
-	if rid := strings.TrimSpace(h.Get("X-Request-Id")); rid != "" {
-		return rid
+	for _, key := range []string{"X-Trace-Id", "X-Request-Id"} {
+		for _, v := range h.Values(key) {
+			if id := strings.TrimSpace(v); validTraceID(id) {
+				return id
+			}
+		}
 	}
 	return ""
+}
+
+// maxTraceIDLen bounds trace IDs taken from X-Trace-Id and X-Request-Id.
+const maxTraceIDLen = 128
+
+// validTraceID reports whether a trace ID taken from a request header or
+// metadata is usable: 1 to maxTraceIDLen bytes of letters, digits and
+// _ . : - / + = @. This covers UUIDs, ULIDs, base64 and the host/sequence form
+// some request ID middleware produces, and excludes whitespace, quotes,
+// control and non-ASCII bytes. The ID is written to every log record and,
+// with cross-service flush, identifies scopes across processes.
+func validTraceID(id string) bool {
+	if id == "" || len(id) > maxTraceIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '_', c == '-', c == '.', c == ':', c == '/', c == '+', c == '=', c == '@':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // parseW3CTraceparent extracts the 32-hex-char trace-id from a W3C traceparent
