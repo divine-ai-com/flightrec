@@ -250,7 +250,7 @@ Limits to plan for:
 
 - **`Retain` is bounded by memory as well as time.** Retained buffers share `MaxRetained` (16 MB by default); when it is full, the oldest are evicted early. In the end-to-end test, 30 seconds of `Retain` held about 11 seconds of requests at 300 req/s. Raise `MaxRetained`, or watch `Stats().RetainedEvicted`.
 - **At most 8 retained scopes per trace ID.** A trace that calls one service more than 8 times keeps the 8 most recent.
-- **Notices are rate limited.** Each process publishes at most 100 notices per second and applies at most 50 remote flushes per second (bursts of 100); the excess is counted in `NotifierPublishDropped` and `NotifierDeliveryDropped`. A lost subscription is retried with backoff of up to 30 seconds.
+- **Notices are rate limited.** Each process publishes at most 100 messages per second (bursts of 200; each message batches up to 64 notices) and applies at most 50 remote flushes per second (bursts of 100). Notices that do not fit are counted in `NotifierPublishDropped` and `NotifierDeliveryDropped`. A lost subscription is retried with backoff of up to 30 seconds.
 - **A NATS outage does not show in `Stats`.** The NATS client buffers publishes while it reconnects, so they count as published.
 
 On a service that answers clients outside your system, set `DisableFlushMarker: true` and `IgnoreRequestTraceIDs: true`, so you neither tell outsiders about your failures nor let them choose the trace IDs your logs are grouped by. With OpenTelemetry middleware in front, also mark it public (`otelhttp.WithPublicEndpoint()`), or the client's `traceparent` still becomes the span's trace, and so flightrec's.
