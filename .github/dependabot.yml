@@ -8,6 +8,7 @@ updates:
       - /grpcflightrec
       - /otelflightrec
       - /notifier/redisnotifier
+      - /notifier/natsnotifier
     schedule:
       interval: weekly
     open-pull-requests-limit: 0

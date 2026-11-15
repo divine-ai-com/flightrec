@@ -4,7 +4,8 @@
 // Package memnotifier provides an in-process flightrec.Notifier. Every
 // Recorder started with the same Bus receives the notices of the others. It
 // is meant for tests, examples and services that run several Recorders in one
-// process; use a network notifier such as redisnotifier between processes.
+// process; use a network notifier such as redisnotifier or natsnotifier
+// between processes.
 package memnotifier
 
 import (
