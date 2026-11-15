@@ -5,9 +5,30 @@ package flightrec
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
+	mrand "math/rand/v2"
+	"sync"
 	"sync/atomic"
 )
+
+var rngPool = sync.Pool{
+	New: func() any {
+		var seed [32]byte
+		_, _ = rand.Read(seed[:])
+		return mrand.NewChaCha8(seed)
+	},
+}
+
+func generateTraceID() string {
+	ch := rngPool.Get().(*mrand.ChaCha8)
+	var b [16]byte
+	binary.LittleEndian.PutUint64(b[:8], ch.Uint64())
+	binary.LittleEndian.PutUint64(b[8:16], ch.Uint64())
+	rngPool.Put(ch)
+	return hex.EncodeToString(b[:])
+}
 
 // TraceContext holds a W3C 16-byte TraceID, 8-byte SpanID, and trace flags
 // extracted from a context.Context at log or scope-start time.
@@ -153,76 +174,4 @@ func (st *recorderState) notifyScopeEnd(sc *Scope, traceID string, triggered boo
 	for _, obs := range st.loadObservers() {
 		obs.OnScopeEnd(sc, traceID, triggered, reason)
 	}
-}
-
-// ScopeFromContext returns the active Scope in ctx, or nil if none is present.
-func ScopeFromContext(ctx context.Context) *Scope {
-	return scopeFromContext(ctx)
-}
-
-// TraceID returns the trace ID associated with the Scope.
-func (s *Scope) TraceID() string {
-	if s == nil {
-		return ""
-	}
-	s.mu.Lock()
-	tid := s.meta.TraceID
-	s.mu.Unlock()
-	return tid
-}
-
-// AdoptGeneratedTraceID replaces the Scope's trace ID with traceID if the
-// Scope generated a random trace ID because none was present when StartScope
-// was called, or HTTPMiddleware took it from a request header (traceparent,
-// X-Trace-Id or X-Request-Id). otelflightrec calls it when the request's
-// server span starts after the scope (OpenTelemetry middleware inside
-// HTTPMiddleware), so logs and spans share the span's trace. A header ID is
-// kept as an alias: a notifier notice for it still reaches the scope, and a
-// failure is announced under both IDs, since other services may know the
-// request only by the header. A trace ID set with ScopeMeta.TraceID is never
-// replaced. It returns the previous trace ID and true when the trace ID was
-// updated.
-func (s *Scope) AdoptGeneratedTraceID(traceID string) (string, bool) {
-	if s == nil || traceID == "" {
-		return "", false
-	}
-	s.mu.Lock()
-	if s.closed || s.idSource == idExplicit || s.meta.TraceID == traceID {
-		if s.meta.TraceID == traceID {
-			s.idSource = idExplicit
-		}
-		s.mu.Unlock()
-		return "", false
-	}
-	old := s.meta.TraceID
-	keepAlias := s.idSource == idHeader
-	s.meta.TraceID = traceID
-	s.idSource = idExplicit
-	if keepAlias {
-		s.aliasTraceID = old
-	}
-	s.mu.Unlock()
-	if s.state != nil {
-		alias := ""
-		if keepAlias {
-			alias = old
-		}
-		s.state.journalRekey(s, traceID, alias)
-		if h := s.state.hub.Load(); h != nil {
-			h.scopeRekeyed(s, old, traceID, keepAlias)
-		}
-	}
-	return old, true
-}
-
-// TriggerState returns whether the Scope has been triggered and its trigger reason.
-func (s *Scope) TriggerState() (bool, string) {
-	if s == nil {
-		return false, ""
-	}
-	s.mu.Lock()
-	triggered := s.triggered
-	reason := s.triggerReason
-	s.mu.Unlock()
-	return triggered, reason
 }
