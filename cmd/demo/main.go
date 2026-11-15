@@ -122,12 +122,12 @@ func main() {
 	reductionPct := (1.0 - float64(flightBytes)/float64(plainBytes)) * 100.0
 	st := rec.Stats()
 
-	fmt.Println("=== flightrec v0.1 Volume & Fidelity Demo ===")
+	fmt.Println("=== flightrec volume and fidelity demo ===")
 	fmt.Printf("Workload: %d requests (%d healthy, %d failed [1%%]), %d debug logs/request\n\n",
 		totalRequests, totalRequests-totalRequests/failEveryN, totalRequests/failEveryN, logsPerRequest)
 	fmt.Printf("%-26s %12s %12s %12s\n", "Mode", "Log Lines", "Log Bytes", "Wall Time")
 	fmt.Printf("%-26s %12d %12d %12s\n", "Plain slog (LevelDebug)", plainLines, plainBytes, plainDur.Round(time.Microsecond))
-	fmt.Printf("%-26s %12d %12d %12s\n", "flightrec (v0.1)", flightLines, flightBytes, flightDur.Round(time.Microsecond))
+	fmt.Printf("%-26s %12d %12d %12s\n", "flightrec", flightLines, flightBytes, flightDur.Round(time.Microsecond))
 	fmt.Printf("\nLog byte reduction:   %.1f%% (%d B -> %d B)\n", reductionPct, plainBytes, flightBytes)
 	fmt.Printf("Log line reduction:   %.1f%% (%d -> %d lines)\n", (1.0-float64(flightLines)/float64(plainLines))*100.0, plainLines, flightLines)
 	fmt.Printf("Failed trace check:   PASS (trace-0100 retained all %d debug steps in order + error record)\n", len(trace100Steps))
