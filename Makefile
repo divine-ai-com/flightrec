@@ -1,4 +1,5 @@
-# Developer and CI entry points. CI runs these same targets.
+# Developer entry points. CI runs `cover`, `tidy` and `demo` from here; its
+# lint, test, vulnerability and benchmark jobs run per module in ci.yml.
 
 MODULES := . grpcflightrec otelflightrec notifier/redisnotifier notifier/natsnotifier examples/cross-service benchmarks/otelexport
 COVER_MIN_CORE := 85

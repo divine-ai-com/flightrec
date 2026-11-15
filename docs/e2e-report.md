@@ -1,6 +1,6 @@
 # End-to-end test of v0.4.0
 
-On 2026-11-15 the released modules were tested together in a three-service system under load: core `v0.4.0`, `grpcflightrec v0.3.0`, `otelflightrec v0.2.2`, `notifier/redisnotifier v0.3.0` and `notifier/natsnotifier v0.3.0`. They were installed from the module proxy, with no `replace` directives. This page records what was run, what held, and what was found. The bugs it found are tracked in milestone [v0.5.0](https://github.com/divine-ai-com/flightrec/milestone/6).
+On 2026-11-15 the released modules were tested together in a three-service system under load: core `v0.4.0`, `grpcflightrec v0.3.0`, `otelflightrec v0.2.2`, `notifier/redisnotifier v0.3.0` and `notifier/natsnotifier v0.3.0`. They were installed from the module proxy, with no `replace` directives. This page records what was run, what held, and what was found. Every bug it found was fixed in [v0.5.0](https://github.com/divine-ai-com/flightrec/releases/tag/v0.5.0).
 
 ## Setup
 

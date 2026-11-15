@@ -1,5 +1,7 @@
 # Architecture & Design
 
+This page describes the core buffering design. Cross-service flush (`Retain`, notifiers, flush markers) is designed in [proposal 0001](proposals/0001-cross-service-flush.md) and the crash journal in [proposal 0002](proposals/0002-crash-recovery.md).
+
 ## Goals
 
 1. **Skip JSON formatting and I/O for healthy debug logs:** Do not serialize or write `DEBUG`/`INFO` records to `io.Writer` unless a request triggers.
