@@ -15,6 +15,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
 - `Scope.SendFlushMarker` and `ReceiveMarker` let integrations for other protocols send and receive flush markers with the same rules and counters as `HTTPMiddleware` and `NewTransport` (#41).
 - `grpcflightrec`: server interceptors set the `flightrec-flush` trailer (`grpcflightrec.FlushTrailer`) when the scope is triggered, including when the handler panics, and new `UnaryClientInterceptor` and `StreamClientInterceptor` (unary, server-, client- and bidi-streaming) read it and trigger the caller's scope with `downstream:<reason>`. Server interceptors honor `IgnoreRequestTraceIDs` and `DisableFlushMarker`. Requires core `v0.3.0` (#41).
 - New module `notifier/redisnotifier`: a `Notifier` over Redis pub/sub (`github.com/redis/go-redis/v9`). `WithChannel` separates environments sharing a Redis server, and idle subscriptions are checked with PING (`WithHealthCheckInterval`) so a connection that died without closing is detected and resubscribed (#44).
+- New module `notifier/natsnotifier`: a `Notifier` over NATS core subjects (`github.com/nats-io/nats.go`), with `WithSubject` to separate environments. Reconnection and dead-connection detection are left to the NATS client; a connection closed for good makes `Subscribe` return an error (#45).
 
 ### Fixed
 - An informational response such as `103 Early Hints` no longer becomes the recorded status of the request; the final status is used for the 5xx trigger and the summary line (#47).
