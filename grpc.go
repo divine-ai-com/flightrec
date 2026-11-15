@@ -13,7 +13,9 @@ import (
 
 // GRPCMetadataExtractor extracts a trace ID from a gRPC request context
 // (for example via google.golang.org/grpc/metadata.FromIncomingContext
-// combined with ExtractTraceIDFromMetadata).
+// combined with ExtractTraceIDFromMetadata). It is not consulted when the
+// context already carries a trace (an OpenTelemetry span, as reported by
+// Options.TraceExtractor or the registered TraceBridge): that trace is used.
 //
 // For ready-to-use grpc.UnaryServerInterceptor and grpc.StreamServerInterceptor
 // implementations that read incoming gRPC metadata directly, see subpackage
@@ -92,7 +94,7 @@ func InvokeGRPCUnary(
 	req any,
 	handler GRPCUnaryHandler,
 ) (resp any, err error) {
-	traceID := resolveGRPCTraceID(ctx, extractTraceID, rec.state.opts.IgnoreRequestTraceIDs)
+	traceID := resolveGRPCTraceID(ctx, rec.state, extractTraceID)
 	scopeCtx, sc := StartScope(ctx, rec, ScopeMeta{
 		TraceID: traceID,
 		Method:  "gRPC",
@@ -128,7 +130,7 @@ func InvokeGRPCStream(
 	extractTraceID GRPCMetadataExtractor,
 	handler GRPCStreamHandler,
 ) (err error) {
-	traceID := resolveGRPCTraceID(ctx, extractTraceID, rec.state.opts.IgnoreRequestTraceIDs)
+	traceID := resolveGRPCTraceID(ctx, rec.state, extractTraceID)
 	scopeCtx, sc := StartScope(ctx, rec, ScopeMeta{
 		TraceID: traceID,
 		Method:  "gRPC",
@@ -155,10 +157,16 @@ func InvokeGRPCStream(
 	return handler(scopeCtx)
 }
 
-func resolveGRPCTraceID(ctx context.Context, extractTraceID GRPCMetadataExtractor, ignoreRequestIDs bool) string {
-	if ignoreRequestIDs {
+func resolveGRPCTraceID(ctx context.Context, st *recorderState, extractTraceID GRPCMetadataExtractor) string {
+	if st.opts.IgnoreRequestTraceIDs {
 		// Extractors read incoming metadata, which the client controls.
 		return TraceID(ctx)
+	}
+	if st.extractTraceContext(ctx).HasTraceID() {
+		// A trace in the context (an OpenTelemetry stats handler or
+		// interceptor in front) wins over metadata; StartScope takes it from
+		// ctx, unless a parent scope's ID applies.
+		return ""
 	}
 	if extractTraceID != nil {
 		if tid := extractTraceID(ctx); validTraceID(tid) {

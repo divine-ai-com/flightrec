@@ -80,7 +80,7 @@ It is not the right tool when:
 - **Five triggers.** Error log, 5xx or gRPC error, panic, slow request, or an explicit `Flush` from your own code.
 - **Survives a hard kill.** With `StartJournal`, the debug logs of requests in flight when the process was killed are recovered on the next start.
 - **Bounded memory.** A cap per request and a cap for the process, with a counter for every drop.
-- **Trace IDs on every line.** Read from `traceparent`, `X-Trace-Id` or `X-Request-Id` (validated), an active OpenTelemetry span, or generated.
+- **Trace IDs on every line.** Read from an active OpenTelemetry span, `traceparent`, `X-Trace-Id` or `X-Request-Id` (validated), or generated.
 - **No dependencies.** The module uses only the standard library.
 
 ## Install
@@ -164,7 +164,7 @@ func processJob(ctx context.Context, rec *flightrec.Recorder, jobID string) (err
 
 ### gRPC
 
-Use the `github.com/divine-ai-com/flightrec/grpcflightrec` module. Server interceptors open a scope per RPC, read the trace ID from incoming metadata (`traceparent`, `x-trace-id`, `x-request-id`), and set the `flightrec-flush` trailer when the RPC is kept. Client interceptors read that trailer, as `NewTransport` does for HTTP (see [Keep logs across services](#keep-logs-across-services)):
+Use the `github.com/divine-ai-com/flightrec/grpcflightrec` module. Server interceptors open a scope per RPC, take the trace ID from the request's OpenTelemetry trace if it has one or else from incoming metadata (`traceparent`, `x-trace-id`, `x-request-id`), and set the `flightrec-flush` trailer when the RPC is kept. Client interceptors read that trailer, as `NewTransport` does for HTTP (see [Keep logs across services](#keep-logs-across-services)):
 
 ```go
 import "github.com/divine-ai-com/flightrec/grpcflightrec"
@@ -298,7 +298,7 @@ Set both levels explicitly, as in the quick start. Outside a scope, records are 
 
 ### Trace IDs from requests
 
-The trace ID is taken from `traceparent`, then `X-Trace-Id`, then `X-Request-Id`. `X-Trace-Id` and `X-Request-Id` values are used only when they are 1 to 128 bytes of letters, digits and `_ . : - / + = @`; otherwise the next source is tried, then an active OpenTelemetry span, and finally a generated ID.
+The trace ID is taken from the trace already in the request context if there is one (OpenTelemetry middleware or interceptors that run before flightrec, or `Options.TraceExtractor`), so logs, spans and cross-service flush all use the same trace. Put OpenTelemetry middleware outside flightrec's; in the other order, a valid request header is used before the span starts. Otherwise it is taken from `traceparent`, then `X-Trace-Id`, then `X-Request-Id`, and finally generated. `traceparent` must be valid as the W3C Trace Context specification defines it (lowercase hex, non-zero IDs). `X-Trace-Id` and `X-Request-Id` values are used only when they are 1 to 128 bytes of letters, digits and `_ . : - / + = @`; otherwise the next source is tried.
 
 A client can choose these headers. On services that receive requests from outside your system, such as a public API, set `IgnoreRequestTraceIDs: true` so trace IDs come only from your own tracing or are generated. The same applies to the `Flightrec-Flush` response header, which `DisableFlushMarker: true` turns off.
 

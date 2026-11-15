@@ -8,7 +8,7 @@
 
 ## Request Scope Lifecycle
 
-1. **StartScope:** `HTTPMiddleware` extracts a trace ID from W3C `traceparent`, `X-Trace-Id`, or `X-Request-Id` (or generates a 128-bit random hex ID via a pooled `math/rand/v2.ChaCha8` generator). It attaches a `*Scope` to `r.Context()`. The underlying `[]bufferedEntry` ring buffer is allocated lazily on the first buffered record so idle scopes do not pre-allocate ring memory.
+1. **StartScope:** `HTTPMiddleware` takes the trace ID from a trace already in the request context (an OpenTelemetry span), else from W3C `traceparent`, `X-Trace-Id`, or `X-Request-Id` (or generates a 128-bit random hex ID via a pooled `math/rand/v2.ChaCha8` generator). It attaches a `*Scope` to `r.Context()`. The underlying `[]bufferedEntry` ring buffer is allocated lazily on the first buffered record so idle scopes do not pre-allocate ring memory.
 2. **Handle:**
    - **No Scope in `ctx`:** Delegated to `Next.Enabled` and `Next.Handle` unchanged, including attributes and groups added with `WithAttrs` and `WithGroup`. Startup and background logs behave exactly as they would without flightrec.
    - **`level >= PassLeveler` (`WARN`, `ERROR`):** Emitted immediately to `Next.Handle` with `flightrec.trace_id` attached. If `level >= slog.LevelError`, the scope is marked triggered (`reason = "error_log"`).
