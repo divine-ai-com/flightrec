@@ -47,10 +47,10 @@ Two cases need different mechanisms:
 3. A client wrapper reads it:
 
    ```go
-   client := &http.Client{Transport: flightrec.NewTransport(rec, http.DefaultTransport)}
+   client := &http.Client{Transport: flightrec.NewTransport(http.DefaultTransport)}
    ```
 
-   `NewTransport(rec, next, opts ...TransportOption)` returns an `http.RoundTripper`. When a response carries `Flightrec-Flush` with a value from the built-in list, it triggers the scope in the request's context with reason `downstream:<value>`. Any other value is ignored and counted, because the header comes from another service and reaches logs. The header is removed from the response before it is returned, so application code that proxies the response cannot forward it. A request without a scope in its context is unaffected. The variadic options leave room for a later retry-aware policy (a successful retry should eventually not flush upstream); v0.3 ships with none.
+   `NewTransport(next, opts ...TransportOption)` returns an `http.RoundTripper`. When a response carries `Flightrec-Flush` with a value from the built-in list, it triggers the scope in the request's context with reason `downstream:<value>`. Any other value is ignored and counted, because the header comes from another service and reaches logs. The header is removed from the response before it is returned, so application code that proxies the response cannot forward it. A request without a scope in its context is unaffected. The variadic options leave room for a later retry-aware policy (a successful retry should eventually not flush upstream); v0.3 ships with none.
 
 4. Because B's scope is now triggered, B's own response to A carries the marker, and the flush travels up the chain.
 
@@ -128,8 +128,8 @@ All additions; nothing existing changes behavior unless the new options are used
 | Addition | Module |
 | --- | --- |
 | `FlushHeader`, `Options.DisableFlushMarker` (shipped in #47) | core |
-| `NewTransport(rec, next, ...TransportOption) http.RoundTripper`, `TransportOption` | core |
-| `MarkerValue(reason string) (string, bool)` for integrations that send or read markers | core |
+| `NewTransport(next, ...TransportOption) http.RoundTripper`, `TransportOption` | core |
+| `MarkerValue(reason) (string, bool)` for senders and `ValidMarker(value) bool` for receivers | core |
 | `Options.Retain`, `Options.MaxRetained` | core |
 | `Notifier`, `Recorder.StartNotifier(ctx, n) (stop func())` | core |
 | `notifier/memnotifier` | core module, new package |

@@ -133,8 +133,9 @@ type Stats struct {
 	// FlushMarkersMissed counts triggered scopes whose response headers were
 	// already written, so the Flightrec-Flush header could not be added.
 	FlushMarkersMissed uint64
-	// DownstreamTriggers counts scopes triggered by a FlushHeader on a
-	// response read through NewTransport.
+	// DownstreamTriggers counts open scopes that a FlushHeader on a response
+	// read through NewTransport triggered. Responses for scopes that were
+	// already triggered or had ended are not counted.
 	DownstreamTriggers uint64
 	// MarkersRejected counts FlushHeader values from responses that were not
 	// a built-in reason and were ignored.
@@ -515,6 +516,12 @@ func scopeFromContext(ctx context.Context) *Scope {
 
 // Trigger marks the scope to be flushed on End. The first non-empty reason is kept.
 func (s *Scope) Trigger(reason string) {
+	s.trigger(reason)
+}
+
+// trigger marks the scope as triggered and reports whether this call changed
+// an open, untriggered scope.
+func (s *Scope) trigger(reason string) bool {
 	if reason == "" {
 		reason = "triggered"
 	}
@@ -532,6 +539,7 @@ func (s *Scope) Trigger(reason string) {
 	if notify && s.state != nil {
 		s.state.notifyScopeTrigger(s, tid, reason)
 	}
+	return notify
 }
 
 // triggerIfSlow triggers the scope with reason slow_request if it has run for

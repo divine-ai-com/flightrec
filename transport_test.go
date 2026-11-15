@@ -40,7 +40,7 @@ func newService(t *testing.T, handler func(s *service) http.HandlerFunc) *servic
 // client returns an HTTP client whose transport reads flush markers into the
 // service's scopes.
 func (s *service) client() *http.Client {
-	return &http.Client{Transport: flightrec.NewTransport(s.rec, nil)}
+	return &http.Client{Transport: flightrec.NewTransport(nil)}
 }
 
 // call makes a GET request from inside a handler, propagating its context.
@@ -128,10 +128,16 @@ func TestTransportPropagatesFlushThroughThreeServices(t *testing.T) {
 }
 
 func TestTransportRejectsUnknownMarkerValues(t *testing.T) {
-	for _, value := range []string{"owned", "downstream:http_502", "error_log\r\nX: y", ""} {
-		t.Run(value, func(t *testing.T) {
+	for name, values := range map[string][]string{
+		"unknown":       {"owned"},
+		"prefixed":      {"downstream:http_502"},
+		"empty":         {""},
+		"several":       {"http_502", "owned"},
+		"several valid": {"http_502", "http_503"},
+	} {
+		t.Run(name, func(t *testing.T) {
 			down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header()[flightrec.FlushHeader] = []string{value}
+				w.Header()[flightrec.FlushHeader] = values
 			}))
 			t.Cleanup(down.Close)
 
@@ -149,7 +155,7 @@ func TestTransportRejectsUnknownMarkerValues(t *testing.T) {
 			_ = resp.Body.Close()
 
 			if msgs, _ := flushed(t, up.out); len(msgs) != 0 {
-				t.Errorf("value %q triggered a flush: %v", value, msgs)
+				t.Errorf("values %q triggered a flush: %v", values, msgs)
 			}
 			st := up.rec.Stats()
 			if st.DownstreamTriggers != 0 || st.MarkersRejected != 1 {
@@ -169,7 +175,7 @@ func TestTransportWithoutScope(t *testing.T) {
 	t.Cleanup(down.Close)
 	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(io.Discard, nil)})
 
-	resp, err := (&http.Client{Transport: flightrec.NewTransport(rec, nil)}).Get(down.URL)
+	resp, err := (&http.Client{Transport: flightrec.NewTransport(nil)}).Get(down.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +204,68 @@ func TestMarkerValue(t *testing.T) {
 		got, ok := flightrec.MarkerValue(tc.in)
 		if got != tc.want || ok != tc.wantOK {
 			t.Errorf("MarkerValue(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}
+
+func TestTransportCountsOnlyScopesItTriggers(t *testing.T) {
+	downTriggered := newService(t, func(s *service) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(flightrec.FlushHeader, "http_503")
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	})
+
+	up := newService(t, func(s *service) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			// Three failing calls in one request trigger the scope once.
+			for i := 0; i < 3; i++ {
+				_, _ = s.call(r.Context(), downTriggered.srv.URL)
+			}
+		}
+	})
+	resp, err := http.Get(up.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	if got := up.rec.Stats().DownstreamTriggers; got != 1 {
+		t.Errorf("DownstreamTriggers = %d for three markers on one scope, want 1", got)
+	}
+}
+
+func TestTransportTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close() // connections to url now fail
+
+	up := newService(t, func(s *service) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if _, err := s.call(r.Context(), url); err == nil {
+				t.Error("expected a connection error")
+			}
+		}
+	})
+	resp, err := http.Get(up.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if st := up.rec.Stats(); st.DownstreamTriggers != 0 || st.MarkersRejected != 0 {
+		t.Errorf("unexpected counters after a transport error: %+v", st)
+	}
+}
+
+func TestValidMarker(t *testing.T) {
+	for _, v := range []string{"http_502", "error_log", "slow_request", "explicit_flush"} {
+		if !flightrec.ValidMarker(v) {
+			t.Errorf("ValidMarker(%q) = false", v)
+		}
+	}
+	for _, v := range []string{"", "downstream:http_502", "remote:panic", "HTTP_502", "http_502 "} {
+		if flightrec.ValidMarker(v) {
+			t.Errorf("ValidMarker(%q) = true", v)
 		}
 	}
 }
