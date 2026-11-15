@@ -1,6 +1,6 @@
 # Releasing
 
-This repository holds three Go modules, each versioned and tagged on its own:
+This repository holds several Go modules, each versioned and tagged on its own:
 
 | Module | Path | Tag format |
 | --- | --- | --- |

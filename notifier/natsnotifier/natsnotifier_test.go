@@ -7,10 +7,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	natsserver "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
 
@@ -81,7 +83,7 @@ func TestPublishSubscribe(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- sub.Subscribe(ctx, c.deliver) }()
 	waitFor(t, "the subscription", func() bool { return subConn.NumSubscriptions() == 1 })
-	_ = subConn.Flush() // make sure the server has registered it
+	_ = subConn.Flush() // the subscribe round trip may still be in flight
 
 	if err := other.Publish(context.Background(), []byte("wrong subject")); err != nil {
 		t.Fatal(err)
@@ -188,4 +190,71 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 		return true
 	})
 	return nil
+}
+
+func TestSubscribeSurvivesReconnect(t *testing.T) {
+	opts := natsserver.DefaultTestOptions
+	opts.Port = -1
+	srv := natsserver.RunServer(&opts)
+	port := srv.Addr().(*net.TCPAddr).Port
+	url := srv.ClientURL()
+
+	nc, err := nats.Connect(url, nats.ReconnectWait(20*time.Millisecond), nats.MaxReconnects(-1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	n := mustNew(t, nc)
+
+	var c collector
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Subscribe(ctx, c.deliver) }()
+	waitFor(t, "the subscription", func() bool { return nc.NumSubscriptions() == 1 })
+
+	srv.Shutdown()
+	opts.Port = port
+	srv = natsserver.RunServer(&opts)
+	t.Cleanup(srv.Shutdown)
+	waitFor(t, "the client to reconnect", nc.IsConnected)
+
+	pub := mustNew(t, connect(t, url))
+	waitFor(t, "delivery after the reconnect", func() bool {
+		_ = pub.Publish(context.Background(), []byte("after"))
+		return len(c.got()) > 0
+	})
+	select {
+	case err := <-done:
+		t.Fatalf("Subscribe returned %v across a reconnect", err)
+	default:
+	}
+}
+
+func TestSubscribeRefusedByPermissions(t *testing.T) {
+	opts := natsserver.DefaultTestOptions
+	opts.Port = -1
+	opts.Users = []*server.User{{
+		Username: "svc", Password: "pw",
+		Permissions: &server.Permissions{Subscribe: &server.SubjectPermission{Deny: []string{"flightrec.>"}}},
+	}}
+	srv := natsserver.RunServer(&opts)
+	t.Cleanup(srv.Shutdown)
+
+	nc, err := nats.Connect(srv.ClientURL(), nats.UserInfo("svc", "pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+
+	done := make(chan error, 1)
+	go func() { done <- mustNew(t, nc).Subscribe(context.Background(), func([]byte) {}) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, nats.ErrPermissionViolation) {
+			t.Errorf("Subscribe returned %v, want a permissions violation", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Subscribe blocked on a refused subscription")
+	}
 }

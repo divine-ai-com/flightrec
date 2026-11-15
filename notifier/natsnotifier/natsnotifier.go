@@ -5,7 +5,9 @@
 // publish/subscribe, so that a failure in one service flushes the logs other
 // services retained for the same trace.
 //
-//	nc, err := nats.Connect(nats.DefaultURL)
+//	// A short PING interval detects a connection that died without closing
+//	// in about a minute instead of the default four to six.
+//	nc, err := nats.Connect(nats.DefaultURL, nats.PingInterval(20*time.Second))
 //	if err != nil {
 //		return err
 //	}
@@ -18,16 +20,23 @@
 //
 // NATS core messaging is fire and forget, which matches flightrec's best
 // effort cross-service flush. The NATS client reconnects and resubscribes on
-// its own and detects dead connections with its PING interval; messages
-// published while a process is disconnected are not delivered to it.
+// its own and detects dead connections with its PING interval (two missed
+// PINGs, every two minutes by default); messages published while a process
+// is disconnected are not delivered to it.
 package natsnotifier
 
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
+
+// confirmTimeout bounds the round trip that confirms a new subscription.
+const confirmTimeout = 5 * time.Second
 
 // DefaultSubject is the NATS subject used when WithSubject is not given.
 const DefaultSubject = "flightrec.flush"
@@ -74,14 +83,18 @@ func New(nc *nats.Conn, opts ...Option) (*Notifier, error) {
 	return n, nil
 }
 
-// Publish sends msg to every process subscribed to the subject.
+// Publish sends msg to every process subscribed to the subject. It returns
+// once the message is buffered by the NATS client; delivery is not confirmed.
+// While the client is reconnecting, the message waits in its reconnect
+// buffer.
 func (n *Notifier) Publish(_ context.Context, msg []byte) error {
 	return n.nc.Publish(n.subject, msg)
 }
 
 // Subscribe calls deliver for every message on the subject until ctx is done,
-// then returns nil. It returns an error if the subscription cannot be created
-// or the connection is closed for good; flightrec then subscribes again.
+// then returns nil. It returns an error if the subscription cannot be created,
+// the server refuses it (for example a permissions violation), NATS closes
+// it, or the connection is closed for good; flightrec then subscribes again.
 // deliver is only called from Subscribe's own goroutine, so it is never
 // called after Subscribe returns.
 func (n *Notifier) Subscribe(ctx context.Context, deliver func(msg []byte)) error {
@@ -97,6 +110,22 @@ func (n *Notifier) Subscribe(ctx context.Context, deliver func(msg []byte)) erro
 		return err
 	}
 	defer func() { _ = sub.Unsubscribe() }()
+	subClosed := sub.StatusChanged(nats.SubscriptionClosed)
+
+	// Round trip to the server: the subscription is registered when this
+	// returns, and a refusal has been reported.
+	fctx, cancel := context.WithTimeout(ctx, confirmTimeout)
+	err = n.nc.FlushWithContext(fctx)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	if err := n.nc.LastError(); errors.Is(err, nats.ErrPermissionViolation) && strings.Contains(err.Error(), n.subject) {
+		return fmt.Errorf("natsnotifier: subscribe to %q: %w", n.subject, err)
+	}
 
 	for {
 		select {
@@ -104,6 +133,8 @@ func (n *Notifier) Subscribe(ctx context.Context, deliver func(msg []byte)) erro
 			return nil
 		case <-closed:
 			return nats.ErrConnectionClosed
+		case <-subClosed:
+			return errors.New("natsnotifier: subscription closed by NATS")
 		case m := <-msgs:
 			deliver(m.Data)
 		}
