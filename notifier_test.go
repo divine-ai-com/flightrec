@@ -6,6 +6,7 @@ package flightrec_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -412,7 +413,7 @@ func TestAliasRetainedCap(t *testing.T) {
 	log := slog.New(rec)
 	for i := range 20 {
 		h := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			flightrec.ScopeFromContext(r.Context()).AdoptGeneratedTraceID(strconv.FormatInt(int64(0x1000000000000000+i), 16) + "0000000000000000")
+			flightrec.ScopeFromContext(r.Context()).AdoptGeneratedTraceID(fmt.Sprintf("%016x0000000000000001", uint64(0x1000000000000000)+uint64(i)))
 			log.DebugContext(r.Context(), "x")
 		}))
 		req := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -530,13 +530,13 @@ func TestRecoverMarksRecordsTooLargeToJournal(t *testing.T) {
 func TestRecoveryLabelsAdoptedAndExplicitScopes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "j")
 	span := TraceContext{TraceID: [16]byte{0xab, 0xcd}, SpanID: [8]byte{1}}
-	r := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug,
-		TraceExtractor: func(ctx context.Context) TraceContext {
-			if ctx.Value(spanKey{}) != nil {
-				return span
-			}
-			return TraceContext{}
-		}})
+	extract := func(ctx context.Context) TraceContext {
+		if ctx.Value(spanKey{}) != nil {
+			return span
+		}
+		return TraceContext{}
+	}
+	r := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug, TraceExtractor: extract})
 	if _, err := r.StartJournal(path, WithJournalSize(1<<20)); err != nil {
 		t.Fatal(err)
 	}
