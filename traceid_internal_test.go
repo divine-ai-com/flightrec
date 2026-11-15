@@ -94,6 +94,10 @@ func TestGRPCTraceIDSource(t *testing.T) {
 	if got := resolveGRPCTraceID(ctx, nil, true); got != "" {
 		t.Errorf("with ignore set, trace ID = %q, want empty (generated later)", got)
 	}
+	custom := func(context.Context) string { return "custom-id" }
+	if got := resolveGRPCTraceID(ctx, custom, true); got != "" {
+		t.Errorf("with ignore set, a custom extractor was used: %q", got)
+	}
 	bad := func(context.Context) string { return "has space" }
 	if got := resolveGRPCTraceID(ctx, bad, false); got != "req-9" {
 		t.Errorf("invalid custom extractor result was used: %q", got)
