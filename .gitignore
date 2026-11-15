@@ -14,3 +14,6 @@ go.work.sum
 .vscode/
 *.swp
 .DS_Store
+
+# Rendered walkthrough video: attached to releases, not committed.
+docs/media/*.webm

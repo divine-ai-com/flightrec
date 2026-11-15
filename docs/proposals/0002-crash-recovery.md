@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | Accepted, revised after design review |
+| Status | Implemented in v0.4.0 (#76 to #80) |
 | Milestone | v0.4.0 |
 | Scope | core module only |
 
