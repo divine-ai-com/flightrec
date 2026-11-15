@@ -1100,3 +1100,55 @@ func TestTraceBridgeAndScopeObserver(t *testing.T) {
 		t.Fatalf("unexpected observer counts: started=%v triggered=%v ended=%v", obs.started, obs.triggered, obs.ended)
 	}
 }
+
+// TestFailedRequestThatLostEveryRecordSaysSo covers a failed request whose
+// buffer is empty because records were dropped: it must still write a line
+// marked flightrec.truncated.
+func TestFailedRequestThatLostEveryRecordSaysSo(t *testing.T) {
+	marker := func(t *testing.T, out string, wantDropped float64) {
+		t.Helper()
+		var found bool
+		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+			m := map[string]any{}
+			if json.Unmarshal([]byte(l), &m) != nil || m["msg"] != "buffered records dropped" {
+				continue
+			}
+			found = true
+			if m["flightrec.truncated"] != true || m["flightrec.dropped_records"] != wantDropped || m["flightrec.flush_reason"] != "http_500" || m["level"] != "WARN" {
+				t.Errorf("marker line %v", m)
+			}
+		}
+		if !found {
+			t.Errorf("no marker line in:\n%s", out)
+		}
+	}
+
+	t.Run("record larger than MaxPerScope", func(t *testing.T) {
+		var buf bytes.Buffer
+		rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(&buf, nil), BufferLeveler: slog.LevelDebug, MaxPerScope: 1 << 10})
+		ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t-big"})
+		slog.New(rec).DebugContext(ctx, "huge", "blob", strings.Repeat("x", 4<<10))
+		sc.End(ctx, 500)
+		marker(t, buf.String(), 1)
+	})
+
+	t.Run("buffer evicted by MaxTotal", func(t *testing.T) {
+		var buf bytes.Buffer
+		rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(&buf, nil), BufferLeveler: slog.LevelDebug, MaxPerScope: 64 << 10, MaxTotal: 16 << 10})
+		log := slog.New(rec)
+		oldCtx, old := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t-old"})
+		for range 4 {
+			log.DebugContext(oldCtx, "old", "blob", strings.Repeat("a", 2<<10))
+		}
+		newCtx, young := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t-new"})
+		for range 10 {
+			log.DebugContext(newCtx, "new", "blob", strings.Repeat("b", 2<<10))
+		}
+		young.End(newCtx, 200)
+		if rec.Stats().ScopesEvictedTotalCap == 0 {
+			t.Fatal("the old scope was not evicted")
+		}
+		old.End(oldCtx, 500)
+		marker(t, buf.String(), 4)
+	})
+}

@@ -225,6 +225,24 @@ func (st *recorderState) flushRetained(ctx context.Context, traceID, reason stri
 // flush reason, restoring each entry's log-time trace context.
 func (st *recorderState) writeFlushed(ctx context.Context, entries []bufferedEntry, traceID, reason string, truncated bool, dropped uint64) {
 	scopeTraceBytes, hasScopeTraceBytes := ParseTraceIDHex(traceID)
+	if len(entries) == 0 && truncated {
+		// Every buffered record was dropped (memory limits, or one record
+		// larger than MaxPerScope): say so, or the failed request leaves no
+		// trace in the log.
+		rec := slog.NewRecord(st.now(), slog.LevelWarn, "buffered records dropped", 0)
+		rec.AddAttrs(
+			slog.String("flightrec.trace_id", traceID),
+			slog.String("flightrec.flush_reason", reason),
+			slog.Bool("flightrec.truncated", true),
+			slog.Uint64("flightrec.dropped_records", dropped),
+		)
+		tctx := ctx
+		if hasScopeTraceBytes {
+			tctx = st.injectTraceContext(ctx, TraceContext{TraceID: scopeTraceBytes})
+		}
+		_ = st.baseNext.Handle(tctx, rec)
+		return
+	}
 	for i, e := range entries {
 		tc := e.traceCtx
 		if !tc.HasTraceID() && hasScopeTraceBytes {

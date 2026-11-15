@@ -293,8 +293,10 @@ Set both levels explicitly, as in the quick start. Outside a scope, records are 
 
 | Option | Default | When the limit is reached |
 | --- | --- | --- |
-| `MaxPerScope` | 256 KB | The request drops its oldest records, and its flushed output is marked `flightrec.truncated` |
+| `MaxPerScope` | 256 KB | The request drops its oldest records, and a single record larger than the limit is dropped by itself. Its flushed output is marked `flightrec.truncated` |
 | `MaxTotal` | 64 MB | The oldest requests lose their buffers |
+
+A failed request that lost every buffered record writes one `buffered records dropped` line at Warn level, with `flightrec.truncated` and `flightrec.dropped_records`, so the loss is visible in the log and not only in `Stats`.
 
 ### Trace IDs from requests
 
