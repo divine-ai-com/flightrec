@@ -375,7 +375,7 @@ func (h *notifierHub) runSubscriber(ctx context.Context) {
 			backoff = notifierBackoffMin
 		}
 		// Up to 20% jitter so a fleet does not reconnect in step.
-		wait := backoff + time.Duration(mrand.Int64N(int64(backoff)/5+1))
+		wait := backoff + time.Duration(mrand.Int64N(int64(backoff)/5+1)) //nolint:gosec // jitter, not a security value
 		select {
 		case <-ctx.Done():
 			return
