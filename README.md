@@ -250,7 +250,7 @@ Limits to plan for:
 
 - **`Retain` is bounded by memory as well as time.** Retained buffers share `MaxRetained` (16 MB by default); when it is full, the oldest are evicted early. In the end-to-end test, 30 seconds of `Retain` held about 11 seconds of requests at 300 req/s. Raise `MaxRetained`, or watch `Stats().RetainedEvicted`.
 - **At most 8 retained scopes per trace ID.** A trace that calls one service more than 8 times keeps the 8 most recent.
-- **Notices are rate limited.** Each process publishes at most 100 messages per second (bursts of 200; each message batches up to 64 notices) and applies at most 50 remote flushes per second (bursts of 100). Notices that do not fit are counted in `NotifierPublishDropped` and `NotifierDeliveryDropped`. A lost subscription is retried with backoff of up to 30 seconds.
+- **Notices are rate limited.** Each process publishes at most 100 messages per second (bursts of 200; each message batches up to 64 notices) and acts on at most 50 matching notices per second (bursts of 100). Notices that do not fit are counted in `NotifierPublishDropped` and `NotifierDeliveryDropped`. A lost subscription is retried with backoff of up to 30 seconds, plus up to 20% jitter.
 - **A NATS outage does not show in `Stats`.** The NATS client buffers publishes while it reconnects, so they count as published.
 
 On a service that answers clients outside your system, set `DisableFlushMarker: true` and `IgnoreRequestTraceIDs: true`, so you neither tell outsiders about your failures nor let them choose the trace IDs your logs are grouped by. With OpenTelemetry middleware in front, also mark it public (`otelhttp.WithPublicEndpoint()`), or the client's `traceparent` still becomes the span's trace, and so flightrec's.
@@ -423,7 +423,7 @@ Against a no-op exporter, which measures the processor alone, flightrec adds 3 t
 - **Spans stay in one process.** Cross-service flush keeps logs in other services. `otelflightrec` keeps spans only in the process where the scope was triggered; a service flushed by a remote notice has already exported or dropped its spans.
 - **Cross-service flush is best effort.** See [Keep logs across services](#keep-logs-across-services).
 - **A hard kill needs the journal.** Panics are flushed. After `SIGKILL` or an out-of-memory kill, buffered records are recovered on the next start only with [`StartJournal`](#survive-a-hard-kill), and only those still in its ring.
-- **Logs after a request ends are written at once.** A record logged with the request's context after its scope ended (a goroutine using `context.WithoutCancel(r.Context())`, say) is written immediately, whatever its level, since there is no buffer left to hold it.
+- **Logs after a request ends are written at once.** A record logged with the request's context after its scope ended (a goroutine using `context.WithoutCancel(r.Context())`, say) is written immediately if it is at or above `BufferLeveler`, even below `PassLeveler`, since there is no buffer left to hold it.
 - **The context must be passed.** `slog.Debug(...)` without a context has no request to attach to and is handled as a log outside a request.
 - **Values are captured by reference until a request ends.** Attributes implementing `slog.LogValuer` are resolved when buffered. A pointer, map or slice logged with `slog.Any` shows its state when the request ends; with `Retain`, a copy is taken then, which costs time on healthy requests that log many distinct pointers.
 
