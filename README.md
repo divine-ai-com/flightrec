@@ -271,7 +271,7 @@ On restart, before it returns, `StartJournal` writes each interrupted request's 
 
 What to know:
 
-- **The file is a ring.** It holds the most recent records of all requests, healthy ones included, so size it (`WithJournalSize`, 16 MB by default) as journaled bytes per second times the longest request you want to recover. `Stats().JournalOldestAge` shows the time span it covers.
+- **The file is a ring.** It holds the most recent records of all requests, healthy ones included, so size it (`WithJournalSize`, 16 MB by default) as journaled bytes per second times the longest request you want to recover. `Stats().JournalOldestAge` shows the time span it covers. A single record larger than about 64 KB once encoded is not journaled; its request is recovered marked `flightrec.truncated`, with the count in `flightrec.dropped_records` on the summary line.
 - **Cost.** Each buffered record is also encoded into the file: 10 to 25% more time per buffered record in our benchmarks, and no extra allocations. Recovery reads the old file one stripe at a time; it takes well under a second at the default size.
 - **Safety.** The file is created with mode 0600 and locked; it holds debug data before any redaction your handler applies, so keep the directory private. `stop` and recovery overwrite it with zeros before removing it. Torn writes, a damaged file and a crash during recovery are handled: entries are checksummed, and a file that fails recovery three times is abandoned. A regular file at the path that is not a journal is never deleted (`StartJournal` returns an error); a symlink there is removed without being followed.
 - **Scope.** It survives the death of the process, not of the machine, and records are written at least once: a crash during a flush or during recovery can repeat some lines. Linux, macOS and the BSDs; elsewhere, including Windows, `StartJournal` returns `ErrJournalUnsupported`.
@@ -328,7 +328,7 @@ slog.Info("flightrec",
 | `flightrec.flush_reason` | flushed records | Why the request was kept (see below) |
 | `flightrec.truncated`, `flightrec.dropped_records` | first flushed record, if records were lost, or a `buffered records dropped` line if none is left | The buffer hit a memory limit; `dropped_records` counts the records lost, wherever they were |
 | `flightrec.recovered`, `flightrec.recovered_host`, `flightrec.recovered_process_start` | records recovered after a crash | Written by the next start of a killed process (`StartJournal`) |
-| `flightrec.truncated` | first recovered record of a request, if its oldest records were overwritten in the journal | The journal ring wrapped during the request |
+| `flightrec.truncated`, `flightrec.dropped_records` | first recovered record and summary line of a request whose oldest records were overwritten in the journal, or that had records too large to journal (`dropped_records` counts those) | Some of the request's records are missing |
 | `flightrec.recovered_scope` | records recovered for a request with no trace ID | Groups the lines of that request |
 | `duration`, `status` (or `grpc.code`), `method`, `path`, `flightrec.dropped_records` | the summary line | Outcome of a healthy request |
 
