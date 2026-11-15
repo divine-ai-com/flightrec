@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,9 +85,9 @@ func TestNotifierFlushesRetainedScopeInAnotherProcess(t *testing.T) {
 	eventually(t, "b to flush its retained scope", func() bool {
 		return flushedReasons(t, b.out)["b: queued email"] == "remote:http_502"
 	})
-	if st := c.rec.Stats(); st.NotifierPublished != 1 {
-		t.Errorf("c NotifierPublished = %d, want 1", st.NotifierPublished)
-	}
+	eventually(t, "c to count its publish", func() bool { return c.rec.Stats().NotifierPublished == 1 })
+	eventually(t, "b to count its remote flush", func() bool { return b.rec.Stats().RemoteFlushes == 1 })
+	time.Sleep(20 * time.Millisecond)
 	if st := b.rec.Stats(); st.RemoteFlushes != 1 || st.NotifierPublished != 0 {
 		t.Errorf("b RemoteFlushes=%d NotifierPublished=%d, want 1 and 0 (no echo)", st.RemoteFlushes, st.NotifierPublished)
 	}
@@ -185,7 +186,11 @@ func TestNotifierIgnoresMalformedMessages(t *testing.T) {
 	} {
 		_ = bus.Publish(context.Background(), []byte(msg))
 	}
-	eventually(t, "malformed notices to be counted", func() bool { return b.rec.Stats().NotifierDeliveryDropped == 4 })
+	_ = bus.Publish(context.Background(), make([]byte, 70<<10)) // too large
+	eventually(t, "malformed notices to be counted", func() bool { return b.rec.Stats().NotifierRejected == 5 })
+	if got := b.rec.Stats().NotifierDeliveryDropped; got != 0 {
+		t.Errorf("malformed input counted as load shedding: NotifierDeliveryDropped=%d", got)
+	}
 
 	ctx, sc := flightrec.StartScope(context.Background(), b.rec, flightrec.ScopeMeta{TraceID: "trace-6"})
 	if triggered, _ := sc.TriggerState(); triggered {
@@ -277,5 +282,50 @@ func TestNotifierConcurrent(t *testing.T) {
 		if st := n.rec.Stats(); st.ActiveScopes != 0 {
 			t.Errorf("leaked active scopes: %+v", st)
 		}
+	}
+}
+
+func TestNotifierDoesNotPublishGeneratedTraceIDs(t *testing.T) {
+	bus := memnotifier.New()
+	c := newNode(t, bus, flightrec.Options{})
+	listening(t, bus, 1)
+	failRequest(c, "") // no trace ID: one is generated
+	time.Sleep(30 * time.Millisecond)
+	if got := c.rec.Stats().NotifierPublished; got != 0 {
+		t.Errorf("NotifierPublished = %d for a generated trace ID, want 0", got)
+	}
+}
+
+// TestNotifierNoticeRacingRetain ends a healthy scope at the same time as a
+// remote failure for its trace arrives. Whatever the interleaving, the
+// scope's records must be written.
+func TestNotifierNoticeRacingRetain(t *testing.T) {
+	bus := memnotifier.New()
+	b := newNode(t, bus, flightrec.Options{Retain: time.Minute})
+	c := newNode(t, bus, flightrec.Options{})
+	listening(t, bus, 2)
+
+	// Stay within the remote flush burst (100), so any missing scope is a
+	// lost notice, not deliberate load shedding.
+	const n = 90
+	for i := 0; i < n; i++ {
+		id := "race-" + strconv.Itoa(i)
+		ctx, sc := flightrec.StartScope(context.Background(), b.rec, flightrec.ScopeMeta{TraceID: id})
+		b.log.DebugContext(ctx, id)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); sc.End(ctx, 200) }()
+		go func() { defer wg.Done(); failRequest(c, id) }()
+		wg.Wait()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(flushedReasons(t, b.out)) != n && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(flushedReasons(t, b.out)); got != n {
+		t.Fatalf("%d of %d racing scopes written; stats %+v", got, n, b.rec.Stats())
+	}
+	if st := b.rec.Stats(); st.NotifierDeliveryDropped != 0 || st.RetainedScopes != 0 {
+		t.Errorf("unexpected drops or leftovers: %+v", st)
 	}
 }

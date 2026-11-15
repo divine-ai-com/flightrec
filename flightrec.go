@@ -188,12 +188,16 @@ type Stats struct {
 	// NotifierPublishDropped counts announcements dropped because the queue
 	// was full or the publish rate limit was reached.
 	NotifierPublishDropped uint64
-	// NotifierPublishErrors counts failed Notifier.Publish calls.
+	// NotifierPublishErrors counts announcements in failed Notifier.Publish
+	// calls. Like NotifierPublished, it counts trace IDs, not calls.
 	NotifierPublishErrors uint64
-	// NotifierDeliveryDropped counts received notices that were malformed,
-	// arrived while the delivery queue was full, or exceeded the remote
-	// flush rate limit.
+	// NotifierDeliveryDropped counts received notices dropped under load:
+	// the delivery queue was full or the remote flush rate limit was reached.
 	NotifierDeliveryDropped uint64
+	// NotifierRejected counts received messages or notices that were
+	// malformed: invalid encoding or version, too large, an invalid trace ID
+	// or a reason that is not built in.
+	NotifierRejected uint64
 	// NotifierSubscribeErrors counts Notifier.Subscribe calls that failed
 	// and were retried.
 	NotifierSubscribeErrors uint64
@@ -249,9 +253,11 @@ type recorderState struct {
 	notifierPublishDropped    atomic.Uint64
 	notifierPublishErrors     atomic.Uint64
 	notifierDeliveryDropped   atomic.Uint64
+	notifierRejected          atomic.Uint64
 	notifierSubscribeErrors   atomic.Uint64
 
-	hub atomic.Pointer[notifierHub]
+	hub   atomic.Pointer[notifierHub]
+	hubMu sync.Mutex // serializes StartNotifier and stop
 
 	retained retainedSet
 
@@ -380,6 +386,7 @@ func (r *Recorder) Stats() Stats {
 		NotifierPublishDropped:    st.notifierPublishDropped.Load(),
 		NotifierPublishErrors:     st.notifierPublishErrors.Load(),
 		NotifierDeliveryDropped:   st.notifierDeliveryDropped.Load(),
+		NotifierRejected:          st.notifierRejected.Load(),
 		NotifierSubscribeErrors:   st.notifierSubscribeErrors.Load(),
 	}
 	stats.RetainedScopes, stats.RetainedBytes, stats.RetainedOldestAge = retainedScopes, retainedBytes, retainedOldest
@@ -616,12 +623,13 @@ func (s *Scope) trigger(reason string) bool {
 		reason = "triggered"
 	}
 	s.mu.Lock()
-	var notify bool
+	var notify, generated bool
 	var tid string
 	if !s.triggered {
 		s.triggered = true
 		s.triggerReason = reason
 		tid = s.meta.TraceID
+		generated = s.generatedTraceID
 		notify = !s.closed
 	}
 	s.mu.Unlock()
@@ -629,7 +637,7 @@ func (s *Scope) trigger(reason string) bool {
 	if notify && s.state != nil {
 		s.state.notifyScopeTrigger(s, tid, reason)
 		if h := s.state.hub.Load(); h != nil {
-			h.localTrigger(tid, reason)
+			h.localTrigger(tid, reason, generated)
 		}
 	}
 	return notify
@@ -874,6 +882,7 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	}
 
 	traceID := s.meta.TraceID
+	generatedID := s.generatedTraceID
 	method := s.meta.Method
 	path := s.meta.Path
 	triggered := s.triggered
@@ -897,7 +906,7 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 	}
 	st.activeScopes.Add(-1)
 	if h := st.hub.Load(); h != nil {
-		h.scopeEnded(s, traceID, triggered, reason)
+		h.scopeEnded(s, traceID, triggered, reason, generatedID)
 	}
 
 	scopeTraceBytes, hasScopeTraceBytes := ParseTraceIDHex(traceID)
@@ -916,6 +925,11 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 		// only if the retained scope expires or is evicted.
 		droppedCount = droppedInScope
 		st.retain(traceID, entries, truncated, droppedInScope, now)
+		if h := st.hub.Load(); h != nil {
+			// A notice may have arrived after the check above but before
+			// the scope was retained, when nothing could find it.
+			h.afterRetain(traceID)
+		}
 	} else {
 		st.scopesHealthyDropped.Add(1)
 		st.recordsHealthyDropped.Add(uint64(healthyDropped))

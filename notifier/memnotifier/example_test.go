@@ -23,9 +23,7 @@ func Example() {
 	checkout := flightrec.New(flightrec.Options{Next: printer("checkout")})
 	defer email.StartNotifier(ctx, bus)()
 	defer checkout.StartNotifier(ctx, bus)()
-	for bus.Subscribers() < 2 {
-		time.Sleep(time.Millisecond)
-	}
+	waitUntil(func() bool { return bus.Subscribers() == 2 })
 
 	sctx, sc := flightrec.StartScope(ctx, email, flightrec.ScopeMeta{TraceID: "order-7"})
 	slog.New(email).DebugContext(sctx, "receipt queued")
@@ -35,12 +33,17 @@ func Example() {
 	slog.New(checkout).DebugContext(fctx, "card declined")
 	fc.End(fctx, 502) // failed: written, and announced to email
 
-	for email.Stats().RemoteFlushes == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	// Output:
+	waitUntil(func() bool { return email.Stats().RemoteFlushes == 1 })
+	// Unordered output:
 	// checkout: card declined (http_502)
 	// email: receipt queued (remote:http_502)
+}
+
+// waitUntil polls cond for up to two seconds.
+func waitUntil(cond func() bool) {
+	for deadline := time.Now().Add(2 * time.Second); !cond() && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // printer returns a handler that prints flushed records only.

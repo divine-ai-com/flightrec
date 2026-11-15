@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	mrand "math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,9 @@ import (
 // ctx is done, then returns nil. It returns an error if the subscription
 // fails; flightrec then subscribes again with exponential backoff. deliver
 // must not be called after Subscribe returns.
+//
+// Both methods must return promptly once ctx is done: stopping the notifier
+// waits for them.
 type Notifier interface {
 	Publish(ctx context.Context, msg []byte) error
 	Subscribe(ctx context.Context, deliver func(msg []byte)) error
@@ -44,7 +48,19 @@ const (
 	notifierBackoffMin     = 100 * time.Millisecond
 	notifierBackoffMax     = 30 * time.Second
 	notifierMessageVersion = 1
+	notifierMaxMessageSize = 64 << 10
 )
+
+// NotifierOption configures StartNotifier. No options are defined yet; the
+// parameter exists so limits can be made configurable without changing the
+// signature.
+type NotifierOption interface {
+	applyNotifier(*notifierConfig)
+}
+
+// notifierConfig holds settings from NotifierOption values. It is empty until
+// the first option is added.
+type notifierConfig struct{}
 
 // notice is one flushed trace in a notifier message.
 type notice struct {
@@ -105,20 +121,28 @@ type notifierHub struct {
 //
 //   - a scope triggered by a local failure announces its trace ID once;
 //     scopes triggered by a downstream marker or a remote notice do not, so
-//     notices cannot echo between services;
+//     notices cannot echo between services, and generated trace IDs, which
+//     no other process knows, are not announced;
 //   - a notice from another process flushes this process's retained scopes
-//     for that trace (Options.Retain) and triggers its active ones, with
-//     reason "remote:<reason>"; scopes for that trace that start within 30
-//     seconds of the notice are triggered too;
+//     for that trace (Options.Retain) and triggers its running ones, with
+//     reason "remote:<reason>"; scopes for that trace that start or end
+//     within 30 seconds of the notice are triggered too;
 //   - a local failure also flushes retained scopes for the same trace in
-//     this process.
+//     this process, with reason "remote:<reason>". When the failure is an
+//     error log, this happens inside the logging call.
 //
 // Publishing is queued and rate limited; delivery is rate limited too.
 // Drops and errors are counted in Stats. Calling StartNotifier again stops
-// the previous notifier first. stop waits for the background goroutines to
-// exit.
-func (r *Recorder) StartNotifier(ctx context.Context, n Notifier) (stop func()) {
+// the previous notifier first. stop waits for the background goroutines,
+// which requires n to honor ctx (see Notifier).
+func (r *Recorder) StartNotifier(ctx context.Context, n Notifier, opts ...NotifierOption) (stop func()) {
+	var cfg notifierConfig
+	for _, o := range opts {
+		o.applyNotifier(&cfg)
+	}
 	st := r.state
+	st.hubMu.Lock()
+	defer st.hubMu.Unlock()
 	if prev := st.hub.Swap(nil); prev != nil {
 		prev.stop()
 	}
@@ -136,6 +160,9 @@ func (r *Recorder) StartNotifier(ctx context.Context, n Notifier) (stop func()) 
 		cancel:    cancel,
 	}
 	st.hub.Store(h)
+	// Detach as soon as ctx is done, so scopes stop being indexed and
+	// announcements stop queueing for a notifier that is no longer running.
+	context.AfterFunc(hctx, func() { st.hub.CompareAndSwap(h, nil) })
 	h.wg.Add(3)
 	go h.runPublisher(hctx)
 	go h.runSubscriber(hctx)
@@ -143,6 +170,8 @@ func (r *Recorder) StartNotifier(ctx context.Context, n Notifier) (stop func()) 
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			st.hubMu.Lock()
+			defer st.hubMu.Unlock()
 			st.hub.CompareAndSwap(h, nil)
 			h.stop()
 		})
@@ -187,14 +216,38 @@ func (h *notifierHub) announced(traceID string) (string, bool) {
 func (h *notifierHub) scopeRekeyed(sc *Scope, oldID, newID string) {
 	h.removeActive(sc, oldID)
 	h.scopeStarted(sc, newID)
+	// End may have run between the trace ID change and the insert above.
+	sc.mu.Lock()
+	closed := sc.closed
+	sc.mu.Unlock()
+	if closed {
+		h.removeActive(sc, newID)
+	}
 }
 
 // scopeEnded removes a scope from the active index.
-func (h *notifierHub) scopeEnded(sc *Scope, traceID string, triggered bool, reason string) {
+func (h *notifierHub) scopeEnded(sc *Scope, traceID string, triggered bool, reason string, generated bool) {
 	h.removeActive(sc, traceID)
 	if triggered {
 		// Status and slow-request triggers are decided at End.
-		h.localTrigger(traceID, reason)
+		h.localTrigger(traceID, reason, generated)
+	}
+}
+
+// afterRetain flushes a scope that was retained just after a notice for its
+// trace, from another process or a local failure, was handled.
+func (h *notifierHub) afterRetain(traceID string) {
+	h.mu.Lock()
+	reason, ok := h.received.get(traceID)
+	if !ok {
+		reason, ok = h.published.get(traceID)
+	}
+	h.mu.Unlock()
+	if !ok {
+		return
+	}
+	if n := h.st.flushRetained(context.Background(), traceID, "remote:"+reason); n > 0 {
+		h.st.remoteFlushes.Add(uint64(n))
 	}
 }
 
@@ -226,8 +279,12 @@ func (h *notifierHub) activeScopes(traceID string) []*Scope {
 
 // localTrigger announces a locally originated failure once per trace and
 // flushes this process's retained scopes for the same trace.
-func (h *notifierHub) localTrigger(traceID, reason string) {
+func (h *notifierHub) localTrigger(traceID, reason string, generated bool) {
 	if strings.HasPrefix(reason, "remote:") || strings.HasPrefix(reason, "downstream:") {
+		return
+	}
+	if generated || !validTraceID(traceID) {
+		// No other process can know a generated ID.
 		return
 	}
 	value, _ := MarkerValue(reason)
@@ -270,20 +327,30 @@ func (h *notifierHub) runPublisher(ctx context.Context) {
 				break fill
 			}
 		}
-		if !h.publish.take() {
-			h.st.notifierPublishDropped.Add(uint64(len(batch)))
-			continue
+		// Wait for a token rather than dropping: notices keep queueing and
+		// batching meanwhile, and the bounded queue does the dropping.
+		if !h.publish.wait(ctx) {
+			return
+		}
+	refill:
+		for len(batch) < notifierBatchSize {
+			select {
+			case next := <-h.outbox:
+				batch = append(batch, next)
+			default:
+				break refill
+			}
 		}
 		msg, err := json.Marshal(notifierMessage{Version: notifierMessageVersion, Origin: h.origin, Notices: batch})
 		if err != nil {
-			h.st.notifierPublishErrors.Add(1)
+			h.st.notifierPublishErrors.Add(uint64(len(batch)))
 			continue
 		}
 		pctx, cancel := context.WithTimeout(ctx, notifierPublishTimeout)
 		err = h.n.Publish(pctx, msg)
 		cancel()
 		if err != nil {
-			h.st.notifierPublishErrors.Add(1)
+			h.st.notifierPublishErrors.Add(uint64(len(batch)))
 			continue
 		}
 		h.st.notifierPublished.Add(uint64(len(batch)))
@@ -295,19 +362,24 @@ func (h *notifierHub) runSubscriber(ctx context.Context) {
 	defer h.wg.Done()
 	backoff := notifierBackoffMin
 	for {
+		started := time.Now()
 		err := h.n.Subscribe(ctx, h.receive)
 		if ctx.Err() != nil {
 			return
 		}
-		if err == nil {
-			backoff = notifierBackoffMin
-		} else {
+		if err != nil {
 			h.st.notifierSubscribeErrors.Add(1)
 		}
+		// A subscription that ran for a while was healthy; start over.
+		if err == nil || time.Since(started) > notifierBackoffMax {
+			backoff = notifierBackoffMin
+		}
+		// Up to 20% jitter so a fleet does not reconnect in step.
+		wait := backoff + time.Duration(mrand.Int64N(int64(backoff)/5+1))
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(wait):
 		}
 		if backoff *= 2; backoff > notifierBackoffMax {
 			backoff = notifierBackoffMax
@@ -318,9 +390,13 @@ func (h *notifierHub) runSubscriber(ctx context.Context) {
 // receive decodes a message from the Notifier and queues its notices. It
 // runs on the backend's goroutine, so it never blocks.
 func (h *notifierHub) receive(msg []byte) {
+	if len(msg) > notifierMaxMessageSize {
+		h.st.notifierRejected.Add(1)
+		return
+	}
 	var m notifierMessage
-	if err := json.Unmarshal(msg, &m); err != nil || m.Version != notifierMessageVersion {
-		h.st.notifierDeliveryDropped.Add(1)
+	if err := json.Unmarshal(msg, &m); err != nil || m.Version != notifierMessageVersion || len(m.Notices) > notifierBatchSize {
+		h.st.notifierRejected.Add(1)
 		return
 	}
 	if m.Origin == h.origin {
@@ -328,7 +404,7 @@ func (h *notifierHub) receive(msg []byte) {
 	}
 	for _, n := range m.Notices {
 		if !validTraceID(n.TraceID) || !ValidMarker(n.Reason) {
-			h.st.notifierDeliveryDropped.Add(1)
+			h.st.notifierRejected.Add(1)
 			continue
 		}
 		select {
@@ -359,14 +435,21 @@ func (h *notifierHub) apply(n notice) {
 		h.mu.Unlock()
 		return
 	}
+	// Recorded even when nothing matches now, so scopes that start or end
+	// shortly after are triggered.
+	h.received.add(n.TraceID, n.Reason)
+	h.mu.Unlock()
+
+	scopes := h.activeScopes(n.TraceID)
+	if len(scopes) == 0 && !h.st.hasRetained(n.TraceID) {
+		return
+	}
+	// The budget limits flushing work, not notices about traces this
+	// process never saw.
 	if !h.deliver.take() {
-		h.mu.Unlock()
 		h.st.notifierDeliveryDropped.Add(1)
 		return
 	}
-	h.received.add(n.TraceID, n.Reason)
-	h.mu.Unlock()
-	scopes := h.activeScopes(n.TraceID)
 
 	reason := "remote:" + n.Reason
 	flushed := uint64(h.st.flushRetained(context.Background(), n.TraceID, reason))
@@ -414,9 +497,7 @@ func (r *recentSet) add(key, value string) {
 			break
 		}
 		r.order = r.order[1:]
-		if it.at.Equal(r.items[oldest].at) {
-			delete(r.items, oldest)
-		}
+		delete(r.items, oldest)
 	}
 	if _, exists := r.items[key]; !exists {
 		r.order = append(r.order, key)
@@ -436,6 +517,19 @@ type tokenBucket struct {
 
 func newTokenBucket(rate, burst int, now func() time.Time) *tokenBucket {
 	return &tokenBucket{rate: float64(rate), burst: float64(burst), tokens: float64(burst), last: now(), now: now}
+}
+
+// wait blocks until a token is available or ctx is done, and reports whether
+// it got a token.
+func (b *tokenBucket) wait(ctx context.Context) bool {
+	for !b.take() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Duration(float64(time.Second) / b.rate)):
+		}
+	}
+	return true
 }
 
 func (b *tokenBucket) take() bool {
