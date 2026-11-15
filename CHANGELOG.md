@@ -6,6 +6,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ### Added
 - `HTTPMiddleware` sets the `Flightrec-Flush` response header (`flightrec.FlushHeader`) when a scope is triggered before its headers are written, so callers can keep their own logs for the same request. The value is a built-in reason such as `http_502` or `slow_request`; custom `Flush` reasons are sent as `explicit_flush`. `Options.DisableFlushMarker` turns the header off for services that answer external clients. The header is removed from incoming requests. `Stats` gains `FlushMarkersSent` and `FlushMarkersMissed` (#39).
+- `NewTransport` wraps an `http.RoundTripper` so that a `Flightrec-Flush` header on a response triggers the caller's scope with reason `downstream:<reason>`; the flush then travels up the call chain. A value that is not exactly one built-in reason is ignored and counted, and the header is removed from the response. `MarkerValue` and `ValidMarker` expose the sending and checking rules for integrations. `Stats` gains `DownstreamTriggers` and `MarkersRejected` (#40).
 
 ### Fixed
 - An informational response such as `103 Early Hints` no longer becomes the recorded status of the request; the final status is used for the 5xx trigger and the summary line (#47).
