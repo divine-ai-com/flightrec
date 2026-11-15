@@ -2,6 +2,11 @@
 
 All notable changes to `flightrec` are documented in this file. This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- `otelflightrec` and `grpcflightrec` now require core `v0.2.0` instead of a zero pseudo-version and `v0.1.0`, so they install from the module proxy. `otelflightrec/v0.2.0`, `grpcflightrec/v0.1.1` and `grpcflightrec/v0.2.0` are retracted (#23).
+
 ## [v0.2.0] - 2026-11-15
 
 ### Added

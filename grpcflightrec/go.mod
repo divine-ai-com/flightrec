@@ -3,7 +3,7 @@ module github.com/divine-ai-com/flightrec/grpcflightrec
 go 1.26
 
 require (
-	github.com/divine-ai-com/flightrec v0.1.0
+	github.com/divine-ai-com/flightrec v0.2.0
 	google.golang.org/grpc v1.83.2
 )
 
@@ -16,3 +16,9 @@ require (
 )
 
 replace github.com/divine-ai-com/flightrec => ../
+
+// Require core v0.1.0, which lacks APIs these versions call, so they do not compile.
+retract (
+	v0.2.0
+	v0.1.1
+)
