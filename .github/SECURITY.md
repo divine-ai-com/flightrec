@@ -4,7 +4,7 @@
 
 The latest minor release of each module receives security fixes; see the [releases](https://github.com/divine-ai-com/flightrec/releases) for the current versions. Before 1.0, fixes are not backported to earlier minor releases.
 
-For guidance on running flightrec safely (public-facing services, notifier authentication, sensitive data, resource limits), see [docs/security.md](docs/security.md).
+For guidance on running flightrec safely (public-facing services, notifier authentication, sensitive data, resource limits), see [docs/security.md](../docs/security.md).
 
 ## Reporting a Vulnerability
 
