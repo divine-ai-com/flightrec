@@ -114,11 +114,16 @@ func TestUnaryServerInterceptor(t *testing.T) {
 
 type fakeServerStream struct {
 	grpc.ServerStream
-	ctx context.Context
+	ctx     context.Context
+	trailer metadata.MD
 }
 
 func (f *fakeServerStream) Context() context.Context {
 	return f.ctx
+}
+
+func (f *fakeServerStream) SetTrailer(md metadata.MD) {
+	f.trailer = metadata.Join(f.trailer, md)
 }
 
 func TestStreamServerInterceptor(t *testing.T) {
