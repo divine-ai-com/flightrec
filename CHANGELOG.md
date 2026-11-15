@@ -4,9 +4,16 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+## [v0.4.0] - 2026-11-15
+
+Crash recovery: the debug logs of requests in flight when the process is killed (`SIGKILL`, an out-of-memory kill, a grace period that ran out) are recovered on the next start (proposal 0002).
+
+Modules released: core `v0.4.0` and `otelflightrec/v0.2.2`. `grpcflightrec`, `notifier/redisnotifier` and `notifier/natsnotifier` are unchanged at `v0.3.0`.
+
 ### Added
-- `Recorder.StartJournal` writes the buffered records of every scope to a memory-mapped file that survives the process being killed, with `WithJournalSize`, `ErrJournalUnsupported`, `ErrJournalRunning` and the `Journal*` fields of `Stats` (#70).
-- On the next start, `StartJournal` recovers the requests that were in flight when the process was killed: their buffered records are written to `Next`, tagged `flightrec.flush_reason=crash_recovery` and `flightrec.recovered=true`, followed by one "request interrupted by crash" summary per request. A crash during recovery is retried, up to three attempts (#71).
+- `Recorder.StartJournal(path, opts...)` writes the buffered records of every scope to a memory-mapped ring file that the kernel keeps when the process dies. The file is created with mode 0600 and written with zeros in full; a lock file, `path.lock`, keeps a second process or Recorder off the same path. `WithJournalSize` sets the size (16 MB by default, 1 MB to 1 GB). Memory faults on the file disable the journal instead of crashing. `stop` zeros and removes the file. Linux, macOS and the BSDs; elsewhere `StartJournal` returns `ErrJournalUnsupported`. `ErrJournalRunning` is returned for a second journal on one Recorder. `Stats` gains `JournalRecordsWritten`, `JournalBytesWritten`, `JournalWraps`, `JournalDropped`, `JournalFaults` and `JournalOldestAge` (#70).
+- On the next start, `StartJournal` recovers the requests that were in flight when the process was killed, before it returns: their buffered records are written to `Next` in order with their original time, level, attributes and trace context, tagged `flightrec.flush_reason=crash_recovery`, `flightrec.recovered=true`, `flightrec.recovered_host` and `flightrec.recovered_process_start`, followed by one "request interrupted by crash" summary per request. Records are written at least once. A crash during recovery is retried, up to three attempts; damaged entries are skipped; a file at the path that is not a journal is never deleted. `Stats` gains `JournalRecoveredScopes`, `JournalRecoveredRecords`, `JournalCorruptEntries`, `JournalDiscardedFiles`, `JournalAbandonedRecoveries` and `JournalRecoveryErrors` (#71).
+- `examples/crash-recovery` kills a server mid-request with `SIGKILL` and shows the recovered logs; CI runs it, along with a test that kills a journaling child process at random moments (#72, #73).
 
 ### Fixed
 - `otelflightrec.SpanProcessor` counts the memory a buffered span really holds (the SDK span itself, and each attribute, event and link), about ten times more than before, so `MaxBytesPerTrace` and `MaxTotalBytes` now limit memory to what they state. Expect more spans to be dropped under the same limits; a `MaxBytesPerTrace` below about 500 bytes now drops even the root span (#66).
