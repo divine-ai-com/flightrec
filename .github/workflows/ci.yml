@@ -137,13 +137,10 @@ jobs:
           cache-dependency-path: '**/go.sum'
       - run: make demo
       - name: Cross-service example
+        # The program fails unless every service writes its logs for both
+        # requests.
         working-directory: examples/cross-service
-        run: |
-          out=$(go run .)
-          echo "$out"
-          for want in "gateway   | " "downstream:http_503" "remote:error_log"; do
-            grep -qF "$want" <<<"$out" || { echo "::error::example output is missing: $want"; exit 1; }
-          done
+        run: go run -race .
       # One iteration each: this checks the benchmarks run, not their speed.
       - name: Benchmarks compile and run
         run: |

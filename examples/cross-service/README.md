@@ -8,8 +8,8 @@ gateway  ->  orders  ->  inventory
 
 When inventory fails, flightrec keeps the debug logs of all three, not only inventory's:
 
-- **Synchronous failure** (`?fail=sync`): inventory answers 503. orders handles it and answers 200, and gateway answers 200. The `Flightrec-Flush` response header carries the failure back up the chain, so orders and gateway write their logs with reason `downstream:http_503`.
-- **Asynchronous failure** (`?fail=async`): orders answers at once and reserves stock in the background. By the time inventory fails, gateway and orders have finished and kept their buffers (`Options.Retain`). The notifier announces the failure, and they write the logs they kept with reason `remote:error_log`.
+- **Synchronous failure** (`?fail=sync`): inventory answers 503. orders handles it and answers 200, and gateway answers 200. The `Flightrec-Flush` response header carries the failure back up the chain, so orders and gateway write their logs with reason `downstream:http_503`. Because a notifier is connected as well, its notice sometimes reaches a service before the response does; that service then shows `remote:http_503`. Either way, every service writes its logs.
+- **Asynchronous failure** (`?fail=async`): orders answers at once and reserves stock in the background. By the time inventory fails, gateway and orders have finished and kept their buffers (`Options.Retain`). The notifier announces the failure, and they write the logs they kept with reason `remote:error_log`. The background job in orders is still running when inventory answers, so its own log line shows `downstream:error_log`.
 
 ## Run it in one process
 
@@ -17,7 +17,7 @@ When inventory fails, flightrec keeps the debug logs of all three, not only inve
 go run .
 ```
 
-The three services listen on random local ports and share an in-memory notifier. The output shows what each service wrote, prefixed with its name.
+The three services listen on random local ports and share an in-memory notifier. The output shows what each service wrote, prefixed with its name. The program exits with an error if any service did not write its logs for either request, so CI runs it as a test.
 
 ## Run it as separate processes with Redis
 

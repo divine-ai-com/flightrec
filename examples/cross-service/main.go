@@ -13,7 +13,9 @@
 //  1. A synchronous failure. inventory answers 503; orders handles it and
 //     answers 200; gateway answers 200. The Flightrec-Flush response header
 //     carries the failure up the chain, so all three services write their
-//     debug logs (reason downstream:http_503 for gateway and orders).
+//     debug logs (reason downstream:http_503 for gateway and orders). With a
+//     notifier connected too, the notice can reach a service before the
+//     response does, and that service's reason is remote:http_503 instead.
 //
 //  2. An asynchronous failure. orders answers 200 at once and calls
 //     inventory in the background; by the time inventory fails, gateway and
@@ -67,12 +69,21 @@ func main() {
 	flag.Parse()
 
 	if *role == "all" {
-		if err := runAll(os.Stdout); err != nil {
+		if err := runAll(&output{w: os.Stdout}); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
+	switch *role {
+	case "gateway", "orders":
+		if *next == "" {
+			log.Fatalf("-next is required for role %s", *role)
+		}
+	case "inventory":
+	default:
+		log.Fatalf("unknown role %q: use gateway, orders, inventory or all", *role)
+	}
 	if *redisAddr == "" {
 		log.Fatal("-redis is required when running a single role")
 	}
@@ -85,7 +96,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	svc := newService(*role, *next, os.Stdout)
+	svc := newService(*role, *next, &output{w: os.Stdout})
 	defer svc.rec.StartNotifier(ctx, n)()
 
 	srv := &http.Server{Addr: *listen, Handler: svc.handler(), ReadHeaderTimeout: 5 * time.Second}
@@ -109,9 +120,9 @@ type service struct {
 	async  sync.WaitGroup
 }
 
-func newService(name, next string, out io.Writer) *service {
+func newService(name, next string, out *output) *service {
 	rec := flightrec.New(flightrec.Options{
-		Next:          slog.NewTextHandler(&prefixWriter{prefix: fmt.Sprintf("%-9s | ", name), w: out}, &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: dropTime}),
+		Next:          slog.NewTextHandler(out.writer(name), &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: dropTime}),
 		PassLeveler:   slog.LevelWarn,
 		BufferLeveler: slog.LevelDebug,
 		Retain:        30 * time.Second,
@@ -213,8 +224,8 @@ func (s *service) call(ctx context.Context, url string) error {
 }
 
 // runAll starts the three services in this process on random ports, sends
-// both requests, and prints what each service wrote.
-func runAll(out io.Writer) error {
+// both requests, and checks that every service wrote its logs for each.
+func runAll(out *output) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	bus := memnotifier.New()
@@ -237,45 +248,97 @@ func runAll(out io.Writer) error {
 		defer svc.rec.StartNotifier(ctx, bus)()
 	}
 	orders.next, gateway.next = urls[0], urls[1]
-	for deadline := time.Now().Add(2 * time.Second); bus.Subscribers() < len(services); {
-		if time.Now().After(deadline) {
-			return errors.New("notifier subscriptions did not start")
-		}
-		time.Sleep(time.Millisecond)
+	if err := waitFor(func() bool { return bus.Subscribers() == len(services) }); err != nil {
+		return errors.New("notifier subscriptions did not start")
 	}
 
 	for _, tc := range []struct{ title, query string }{
 		{"1. Synchronous failure: inventory answers 503, the others answer 200", "fail=sync"},
 		{"2. Asynchronous failure: inventory fails after the others have answered", "fail=async"},
 	} {
-		_, _ = fmt.Fprintf(out, "\n%s\n%s\n", tc.title, strings.Repeat("-", len(tc.title)))
+		out.printf("\n%s\n%s\n", tc.title, strings.Repeat("-", len(tc.title)))
+		before := out.flushedServices()
 		resp, err := http.Get(urls[2] + "/checkout?" + tc.query)
 		if err != nil {
 			return err
 		}
 		_ = resp.Body.Close()
+		// Remote flushes arrive asynchronously: wait until every service has
+		// written logs for this request.
+		if err := waitFor(func() bool { return out.flushedServices()-before == len(services) }); err != nil {
+			return fmt.Errorf("%s: not every service wrote its logs", tc.query)
+		}
 		orders.async.Wait()
-		time.Sleep(100 * time.Millisecond) // let remote flushes arrive
 	}
 	return nil
 }
 
-// prefixWriter prefixes each line with the service name. slog handlers write
-// one record per Write call.
-type prefixWriter struct {
-	mu     sync.Mutex
-	prefix string
-	w      io.Writer
+// waitFor polls cond for up to five seconds.
+func waitFor(cond func() bool) error {
+	for deadline := time.Now().Add(5 * time.Second); !cond(); {
+		if time.Now().After(deadline) {
+			return errors.New("timed out")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil
 }
 
-func (p *prefixWriter) Write(b []byte) (int, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if _, err := io.WriteString(p.w, p.prefix); err != nil {
-		return 0, err
-	}
-	return p.w.Write(b)
+// output is stdout shared by every service. Each record is written with its
+// service name in one Write, under one lock, so lines never mix. It also
+// counts, per request, how many services have written flushed logs.
+type output struct {
+	mu      sync.Mutex
+	w       io.Writer
+	flushed map[string]bool // service name + trace ID
 }
+
+func (o *output) printf(format string, args ...any) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	_, _ = fmt.Fprintf(o.w, format, args...)
+}
+
+func (o *output) writer(service string) io.Writer {
+	return writerFunc(func(b []byte) (int, error) {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		line := fmt.Sprintf("%-9s | %s", service, b)
+		if strings.Contains(line, "flightrec.flush_reason=") {
+			if o.flushed == nil {
+				o.flushed = make(map[string]bool)
+			}
+			o.flushed[service+" "+traceIDOf(line)] = true
+		}
+		if _, err := io.WriteString(o.w, line); err != nil {
+			return 0, err
+		}
+		return len(b), nil
+	})
+}
+
+func (o *output) flushedServices() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.flushed)
+}
+
+func traceIDOf(line string) string {
+	const key = "flightrec.trace_id="
+	i := strings.Index(line, key)
+	if i < 0 {
+		return ""
+	}
+	id := line[i+len(key):]
+	if j := strings.IndexByte(id, ' '); j >= 0 {
+		id = id[:j]
+	}
+	return id
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
 
 // dropTime removes the time attribute so the output is easy to read.
 func dropTime(groups []string, a slog.Attr) slog.Attr {
