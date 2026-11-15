@@ -164,7 +164,7 @@ func processJob(ctx context.Context, rec *flightrec.Recorder, jobID string) (err
 
 ### gRPC
 
-Use the `github.com/divine-ai-com/flightrec/grpcflightrec` module. Server interceptors open a scope per RPC, read the trace ID from incoming metadata (`traceparent`, `x-trace-id`, `x-request-id`), and set the `flightrec-flush` trailer when the RPC is kept. Client interceptors read that trailer, as `NewTransport` does for HTTP (see [Keep logs across services](#keep-logs-across-services)):
+Use the `github.com/divine-ai-com/flightrec/grpcflightrec` module. Server interceptors open a scope per RPC, take the trace ID from the request's OpenTelemetry trace if it has one or else from incoming metadata (`traceparent`, `x-trace-id`, `x-request-id`), and set the `flightrec-flush` trailer when the RPC is kept. Client interceptors read that trailer, as `NewTransport` does for HTTP (see [Keep logs across services](#keep-logs-across-services)):
 
 ```go
 import "github.com/divine-ai-com/flightrec/grpcflightrec"
@@ -292,7 +292,7 @@ Set both levels explicitly, as in the quick start. Outside a scope, records are 
 
 ### Trace IDs from requests
 
-The trace ID is taken from an active OpenTelemetry span if the request has one (OpenTelemetry middleware or interceptors run before flightrec), so logs, spans and cross-service flush all use the same trace. Otherwise it is taken from `traceparent`, then `X-Trace-Id`, then `X-Request-Id`, and finally generated. `traceparent` must be valid as the W3C Trace Context specification defines it (lowercase hex, non-zero IDs). `X-Trace-Id` and `X-Request-Id` values are used only when they are 1 to 128 bytes of letters, digits and `_ . : - / + = @`; otherwise the next source is tried.
+The trace ID is taken from the trace already in the request context if there is one (OpenTelemetry middleware or interceptors that run before flightrec, or `Options.TraceExtractor`), so logs, spans and cross-service flush all use the same trace. Put OpenTelemetry middleware outside flightrec's; in the other order, a valid request header is used before the span starts. Otherwise it is taken from `traceparent`, then `X-Trace-Id`, then `X-Request-Id`, and finally generated. `traceparent` must be valid as the W3C Trace Context specification defines it (lowercase hex, non-zero IDs). `X-Trace-Id` and `X-Request-Id` values are used only when they are 1 to 128 bytes of letters, digits and `_ . : - / + = @`; otherwise the next source is tried.
 
 A client can choose these headers. On services that receive requests from outside your system, such as a public API, set `IgnoreRequestTraceIDs: true` so trace IDs come only from your own tracing or are generated. The same applies to the `Flightrec-Flush` response header, which `DisableFlushMarker: true` turns off.
 

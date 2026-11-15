@@ -74,12 +74,15 @@ func MarkerValue(reason string) (value string, ok bool) {
 // headers are written cannot add it, and a panic sends no response at all;
 // Stats.FlushMarkersMissed counts both.
 //
-// The scope is keyed by the request's trace ID (extracted from W3C traceparent,
-// X-Trace-Id, or X-Request-Id headers, in that order; the first valid value
-// wins). X-Trace-Id and X-Request-Id values are valid when they are 1 to 128
-// bytes of letters, digits and _ . : - / + = @. Without a valid header, the
-// trace ID comes from an active OpenTelemetry span or is generated. Services
-// that receive requests from outside your system should set
+// The scope is keyed by the request's trace ID. When the request context
+// already carries a trace (an OpenTelemetry span started by middleware that
+// wraps this one, as reported by Options.TraceExtractor or the registered
+// TraceBridge), that trace is used. Otherwise the ID is taken from the W3C
+// traceparent, X-Trace-Id or X-Request-Id header, in that order (the first
+// valid value wins), or generated. X-Trace-Id and X-Request-Id values are
+// valid when they are 1 to 128 bytes of letters, digits and _ . : - / + = @.
+// Put OpenTelemetry middleware outside HTTPMiddleware so the two agree.
+// Services that receive requests from outside your system should set
 // Options.IgnoreRequestTraceIDs. The buffer
 // is flushed if an error log is recorded, the response status is 5xx, the
 // handler panics (except http.ErrAbortHandler), the duration exceeds SlowAfter,
@@ -88,8 +91,9 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var traceID string
-			// An active span (OpenTelemetry middleware in front) already
-			// carries the request's trace; headers are read only without one.
+			// A trace in the context (OpenTelemetry middleware in front)
+			// wins over headers; StartScope takes it from ctx, unless a
+			// parent scope's ID applies.
 			if !rec.state.opts.IgnoreRequestTraceIDs && !rec.state.extractTraceContext(r.Context()).HasTraceID() {
 				traceID = extractHTTPTraceID(r.Header)
 			}

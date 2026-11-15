@@ -13,7 +13,9 @@ import (
 
 // GRPCMetadataExtractor extracts a trace ID from a gRPC request context
 // (for example via google.golang.org/grpc/metadata.FromIncomingContext
-// combined with ExtractTraceIDFromMetadata).
+// combined with ExtractTraceIDFromMetadata). It is not consulted when the
+// context already carries a trace (an OpenTelemetry span, as reported by
+// Options.TraceExtractor or the registered TraceBridge): that trace is used.
 //
 // For ready-to-use grpc.UnaryServerInterceptor and grpc.StreamServerInterceptor
 // implementations that read incoming gRPC metadata directly, see subpackage
@@ -161,8 +163,9 @@ func resolveGRPCTraceID(ctx context.Context, st *recorderState, extractTraceID G
 		return TraceID(ctx)
 	}
 	if st.extractTraceContext(ctx).HasTraceID() {
-		// An active span (OpenTelemetry interceptor in front) already carries
-		// the request's trace; StartScope takes it from ctx.
+		// A trace in the context (an OpenTelemetry stats handler or
+		// interceptor in front) wins over metadata; StartScope takes it from
+		// ctx, unless a parent scope's ID applies.
 		return ""
 	}
 	if extractTraceID != nil {

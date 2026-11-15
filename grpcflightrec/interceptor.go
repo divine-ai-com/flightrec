@@ -47,7 +47,8 @@ func newClientConfig(opts []ClientOption) clientConfig {
 
 // UnaryServerInterceptor returns a grpc.UnaryServerInterceptor that opens a
 // flightrec Scope for each unary RPC, extracts the trace ID from incoming gRPC
-// metadata ("traceparent", "x-trace-id", or "x-request-id"), and flushes the
+// metadata ("traceparent", "x-trace-id", or "x-request-id") unless the context
+// already carries an OpenTelemetry trace, and flushes the
 // buffer only on server-side faults (Unknown, DeadlineExceeded, Unimplemented,
 // Internal, Unavailable, DataLoss), error logs, panics, slow RPCs, or explicit
 // calls to flightrec.Flush.
@@ -83,7 +84,8 @@ func UnaryServerInterceptor(rec *flightrec.Recorder) grpc.UnaryServerInterceptor
 
 // StreamServerInterceptor returns a grpc.StreamServerInterceptor that opens a
 // flightrec Scope for each streaming RPC, enriches stream.Context() with the
-// scope, extracts the trace ID from incoming gRPC metadata, and flushes the
+// scope, takes the trace ID from the context's OpenTelemetry trace or else from
+// incoming gRPC metadata, and flushes the
 // buffer only on server-side faults, error logs, panics, slow streams, or
 // explicit calls to flightrec.Flush.
 func StreamServerInterceptor(rec *flightrec.Recorder) grpc.StreamServerInterceptor {
