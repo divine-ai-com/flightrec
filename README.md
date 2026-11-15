@@ -307,7 +307,7 @@ slog.Info("flightrec",
 
 ## Performance
 
-Measured for v0.3.0 by the [Benchmarks workflow](https://github.com/divine-ai-com/flightrec/actions/runs/43714183457) on a GitHub Actions runner (AMD EPYC 9V74, 4 vCPU, linux/amd64, Go 1.27.4): 10 alternating runs, benchstat medians. Absolute numbers depend on the machine; the ratios are what carry over. Reproduce locally with:
+Measured on `main` at 010c339 (the code released as v0.3.0) by the [Benchmarks workflow](https://github.com/divine-ai-com/flightrec/actions/runs/43714183457) on a GitHub Actions runner (AMD EPYC 9V74, 4 vCPU, linux/amd64, Go 1.27.4): 10 alternating runs, benchstat medians. Absolute numbers depend on the machine; the ratios are what carry over. Reproduce locally with:
 
 ```bash
 go test -bench=. -benchmem -run='^$' . && go run ./cmd/demo
@@ -330,7 +330,7 @@ How to read this:
 - Against debug logging turned off, buffering is not free. Each buffered call costs about 460 ns, most of it the timestamp and caller lookup that `slog` performs for any enabled record. That is the price of having the detail when a request fails.
 - Calls with more than 5 attributes allocate once per call, as they do in `slog` itself (24 allocations per request against 20 for plain slog, measured with a child logger and 6 attributes).
 - `Retain` copies `slog.Any` values when a request ends. With one struct pointer per call (logged 20 times, encoded once) a retained request takes 13.3 µs against 8.6 µs discarded; many distinct pointers per request cost more.
-- With a notifier attached, starting and ending a scope costs about 120 ns more under parallel load (759 ns against 641 ns per minimal request).
+- With a notifier attached, starting and ending a scope costs roughly 100 to 120 ns more under parallel load (759 ns against 641 ns per minimal request, with about 6% run-to-run noise).
 
 Log volume in the bundled demo, 1,000 requests with 1% failing and 20 debug records each:
 
