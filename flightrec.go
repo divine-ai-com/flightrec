@@ -178,6 +178,29 @@ type Stats struct {
 	// MaxRetained or the per-trace limit, including scopes larger than
 	// MaxRetained on their own, which are dropped instead of retained.
 	RetainedEvicted uint64
+
+	// RemoteFlushes counts scopes flushed or triggered because of a failure
+	// elsewhere in the same trace: in another process, reported through
+	// StartNotifier, or in another scope of this process.
+	RemoteFlushes uint64
+	// NotifierPublished counts trace IDs announced through the notifier.
+	NotifierPublished uint64
+	// NotifierPublishDropped counts announcements dropped because the queue
+	// was full or the publish rate limit was reached.
+	NotifierPublishDropped uint64
+	// NotifierPublishErrors counts announcements in failed Notifier.Publish
+	// calls. Like NotifierPublished, it counts trace IDs, not calls.
+	NotifierPublishErrors uint64
+	// NotifierDeliveryDropped counts received notices dropped under load:
+	// the delivery queue was full or the remote flush rate limit was reached.
+	NotifierDeliveryDropped uint64
+	// NotifierRejected counts received messages or notices that were
+	// malformed: invalid encoding or version, too large, an invalid trace ID
+	// or a reason that is not built in.
+	NotifierRejected uint64
+	// NotifierSubscribeErrors counts Notifier.Subscribe calls that failed
+	// and were retried.
+	NotifierSubscribeErrors uint64
 }
 
 type groupFrame struct {
@@ -225,6 +248,16 @@ type recorderState struct {
 	retainedFlushed           atomic.Uint64
 	retainedExpired           atomic.Uint64
 	retainedEvicted           atomic.Uint64
+	remoteFlushes             atomic.Uint64
+	notifierPublished         atomic.Uint64
+	notifierPublishDropped    atomic.Uint64
+	notifierPublishErrors     atomic.Uint64
+	notifierDeliveryDropped   atomic.Uint64
+	notifierRejected          atomic.Uint64
+	notifierSubscribeErrors   atomic.Uint64
+
+	hub   atomic.Pointer[notifierHub]
+	hubMu sync.Mutex // serializes StartNotifier and stop
 
 	retained retainedSet
 
@@ -348,6 +381,13 @@ func (r *Recorder) Stats() Stats {
 		RetainedFlushed:           st.retainedFlushed.Load(),
 		RetainedExpired:           st.retainedExpired.Load(),
 		RetainedEvicted:           st.retainedEvicted.Load(),
+		RemoteFlushes:             st.remoteFlushes.Load(),
+		NotifierPublished:         st.notifierPublished.Load(),
+		NotifierPublishDropped:    st.notifierPublishDropped.Load(),
+		NotifierPublishErrors:     st.notifierPublishErrors.Load(),
+		NotifierDeliveryDropped:   st.notifierDeliveryDropped.Load(),
+		NotifierRejected:          st.notifierRejected.Load(),
+		NotifierSubscribeErrors:   st.notifierSubscribeErrors.Load(),
 	}
 	stats.RetainedScopes, stats.RetainedBytes, stats.RetainedOldestAge = retainedScopes, retainedBytes, retainedOldest
 	return stats
@@ -531,6 +571,9 @@ func StartScope(ctx context.Context, rec *Recorder, meta ScopeMeta) (context.Con
 	st.scopesStarted.Add(1)
 	scopeCtx := context.WithValue(ctx, scopeContextKey{}, sc)
 	st.notifyScopeStart(scopeCtx, sc, meta.TraceID)
+	if h := st.hub.Load(); h != nil {
+		h.scopeStarted(sc, meta.TraceID)
+	}
 	return scopeCtx, sc
 }
 
@@ -580,18 +623,22 @@ func (s *Scope) trigger(reason string) bool {
 		reason = "triggered"
 	}
 	s.mu.Lock()
-	var notify bool
+	var notify, generated bool
 	var tid string
 	if !s.triggered {
 		s.triggered = true
 		s.triggerReason = reason
 		tid = s.meta.TraceID
+		generated = s.generatedTraceID
 		notify = !s.closed
 	}
 	s.mu.Unlock()
 
 	if notify && s.state != nil {
 		s.state.notifyScopeTrigger(s, tid, reason)
+		if h := s.state.hub.Load(); h != nil {
+			h.localTrigger(tid, reason, generated)
+		}
 	}
 	return notify
 }
@@ -822,8 +869,20 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 		s.triggered = true
 		s.triggerReason = "slow_request"
 	}
+	if !s.triggered {
+		// A notice for this trace may have arrived from another process after
+		// the scope stopped being reachable for remote triggers.
+		if h := st.hub.Load(); h != nil {
+			if r, ok := h.announced(s.meta.TraceID); ok {
+				s.triggered = true
+				s.triggerReason = "remote:" + r
+				st.remoteFlushes.Add(1)
+			}
+		}
+	}
 
 	traceID := s.meta.TraceID
+	generatedID := s.generatedTraceID
 	method := s.meta.Method
 	path := s.meta.Path
 	triggered := s.triggered
@@ -846,6 +905,9 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 		st.totalBytes.Add(-freedBytes)
 	}
 	st.activeScopes.Add(-1)
+	if h := st.hub.Load(); h != nil {
+		h.scopeEnded(s, traceID, triggered, reason, generatedID)
+	}
 
 	scopeTraceBytes, hasScopeTraceBytes := ParseTraceIDHex(traceID)
 
@@ -863,6 +925,11 @@ func (s *Scope) endWithSummaryAttr(ctx context.Context, statusCode int, extraSum
 		// only if the retained scope expires or is evicted.
 		droppedCount = droppedInScope
 		st.retain(traceID, entries, truncated, droppedInScope, now)
+		if h := st.hub.Load(); h != nil {
+			// A notice may have arrived after the check above but before
+			// the scope was retained, when nothing could find it.
+			h.afterRetain(traceID)
+		}
 	} else {
 		st.scopesHealthyDropped.Add(1)
 		st.recordsHealthyDropped.Add(uint64(healthyDropped))

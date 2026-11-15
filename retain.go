@@ -162,6 +162,17 @@ func (st *recorderState) retainedGauges() (scopes, bytes int64, oldest time.Dura
 	return int64(set.order.Len()), set.bytes, oldest
 }
 
+// hasRetained reports whether any scope is retained for traceID.
+func (st *recorderState) hasRetained(traceID string) bool {
+	if st.opts.Retain <= 0 {
+		return false
+	}
+	set := &st.retained
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	return len(set.byTrace[traceID]) > 0
+}
+
 // FlushTrace writes every retained scope for traceID, as if each had been
 // triggered with reason, and returns how many it wrote. A scope is retained
 // only when Options.Retain is set; scopes that have expired or been evicted
