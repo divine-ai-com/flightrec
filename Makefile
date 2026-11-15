@@ -1,7 +1,8 @@
 # Developer and CI entry points. CI runs these same targets.
 
 MODULES := . grpcflightrec otelflightrec notifier/redisnotifier notifier/natsnotifier examples/cross-service
-COVER_MIN_CORE := 80
+COVER_MIN_CORE := 85
+COVER_MIN_OTEL := 85
 COVERPROFILE := coverage.out
 
 .PHONY: all
@@ -16,11 +17,15 @@ test: ## Run tests with the race detector in every module.
 	@for m in $(MODULES); do echo "== test $$m"; (cd $$m && go test -race -shuffle=on ./...) || exit 1; done
 
 .PHONY: cover
-cover: ## Write coverage.out for the core module and fail below COVER_MIN_CORE percent.
+cover: ## Write coverage profiles for the core and otelflightrec modules and fail below their minimums.
 	go test -race -covermode=atomic -coverprofile=$(COVERPROFILE) .
 	@total=$$(go tool cover -func=$(COVERPROFILE) | awk '/^total:/ {sub("%","",$$3); print $$3}'); \
 	echo "core coverage: $$total% (minimum $(COVER_MIN_CORE)%)"; \
 	awk -v t="$$total" -v m="$(COVER_MIN_CORE)" 'BEGIN { exit (t+0 < m+0) }' || { echo "coverage below minimum"; exit 1; }
+	cd otelflightrec && go test -race -covermode=atomic -coverprofile=$(COVERPROFILE) .
+	@total=$$(cd otelflightrec && go tool cover -func=$(COVERPROFILE) | awk '/^total:/ {sub("%","",$$3); print $$3}'); \
+	echo "otelflightrec coverage: $$total% (minimum $(COVER_MIN_OTEL)%)"; \
+	awk -v t="$$total" -v m="$(COVER_MIN_OTEL)" 'BEGIN { exit (t+0 < m+0) }' || { echo "coverage below minimum"; exit 1; }
 
 .PHONY: bench
 bench: ## Run benchmarks in every module.
