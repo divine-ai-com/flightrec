@@ -1089,10 +1089,13 @@ func enrichSpan(s sdktrace.ReadOnlySpan, extra ...attribute.KeyValue) sdktrace.R
 	}
 }
 
-// spanBaseCost is the measured heap held by one ended span apart from its
-// attributes, events and links: the SDK's span struct with its name, contexts,
-// times and status, as referenced from the buffer.
-const spanBaseCost = 400
+// spanBaseCost is the heap held by one ended span apart from its attributes,
+// events and links: the SDK's span struct with its contexts, times and status.
+// Measured at about 400 bytes on linux/amd64 with go.opentelemetry.io/otel/sdk
+// v1.47.0 (heap growth over 20,000 buffered spans, see
+// TestSpanAccountingMatchesHeap) and scaled by pointer size for 32-bit
+// platforms, where most of the struct is pointers and words.
+const spanBaseCost = 400 * int(unsafe.Sizeof(uintptr(0))) / 8
 
 var (
 	attrValueSize = int64(unsafe.Sizeof(attribute.KeyValue{}))

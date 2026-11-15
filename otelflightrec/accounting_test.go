@@ -7,6 +7,7 @@ import (
 	"context"
 	"runtime"
 	"testing"
+	"unsafe"
 
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -21,6 +22,9 @@ var attrKeys = []string{"db.statement", "db.system", "db.name", "db.user"}
 // spans are close to the heap they keep alive, so the byte limits mean what
 // they say.
 func TestSpanAccountingMatchesHeap(t *testing.T) {
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		t.Skip("calibrated on 64-bit platforms")
+	}
 	sp := otelflightrec.NewSpanProcessor(otelflightrec.SpanProcessorOptions{MaxBytesPerTrace: 1 << 30, MaxTotalBytes: 1 << 30})
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
@@ -43,7 +47,7 @@ func TestSpanAccountingMatchesHeap(t *testing.T) {
 		}
 		runtime.GC()
 		runtime.ReadMemStats(&m1)
-		real := float64(m1.HeapAlloc-m0.HeapAlloc) / n
+		real := float64(int64(m1.HeapAlloc)-int64(m0.HeapAlloc)) / n
 		counted := float64(sp.Stats().BufferedBytes-before) / n
 		t.Logf("%d attributes: %.0f B real, %.0f B counted per span", attrs, real, counted)
 		if counted < real*0.75 || counted > real*1.25 {
