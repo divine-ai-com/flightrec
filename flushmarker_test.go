@@ -5,11 +5,14 @@ package flightrec_test
 
 import (
 	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/divine-ai-com/flightrec"
 )
@@ -24,7 +27,9 @@ func markerServer(t *testing.T, mk func(log *slog.Logger) http.HandlerFunc) (*fl
 		PassLeveler:   slog.LevelWarn,
 		BufferLeveler: slog.LevelDebug,
 	})
-	srv := httptest.NewServer(flightrec.HTTPMiddleware(rec)(mk(slog.New(rec))))
+	srv := httptest.NewUnstartedServer(flightrec.HTTPMiddleware(rec)(mk(slog.New(rec))))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0) // the panic case is expected
+	srv.Start()
 	t.Cleanup(srv.Close)
 	return rec, srv.URL, out
 }
@@ -40,7 +45,8 @@ func get(t *testing.T, url string, header http.Header) *http.Response {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		// A handler panic makes the server close the connection.
+		return &http.Response{Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
@@ -78,14 +84,14 @@ func TestFlushMarkerOnResponses(t *testing.T) {
 			wantSent:   1,
 		},
 		{
-			name: "explicit flush with a reason that needs sanitizing",
+			name: "custom reason text is not sent",
 			handler: func(log *slog.Logger) http.HandlerFunc {
 				return func(w http.ResponseWriter, r *http.Request) {
 					flightrec.Flush(r.Context(), "payment mismatch\r\nX-Injected: 1")
 					_, _ = w.Write([]byte("ok"))
 				}
 			},
-			wantMarker: "payment_mismatch__X-Injected:_1",
+			wantMarker: "explicit_flush",
 			wantSent:   1,
 		},
 		{
@@ -95,7 +101,7 @@ func TestFlushMarkerOnResponses(t *testing.T) {
 					flightrec.Flush(r.Context(), "late_but_before_headers")
 				}
 			},
-			wantMarker: "late_but_before_headers",
+			wantMarker: "explicit_flush",
 			wantSent:   1,
 		},
 		{
@@ -104,6 +110,49 @@ func TestFlushMarkerOnResponses(t *testing.T) {
 				return func(w http.ResponseWriter, r *http.Request) {
 					_, _ = w.Write([]byte("partial"))
 					flightrec.Flush(r.Context(), "too_late")
+				}
+			},
+			wantMissed: 1,
+		},
+		{
+			name: "prefixed reason sends the original failure",
+			handler: func(log *slog.Logger) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					flightrec.Flush(r.Context(), "downstream:remote:http_502")
+				}
+			},
+			wantMarker: "http_502",
+			wantSent:   1,
+		},
+		{
+			name: "flush before any write",
+			handler: func(log *slog.Logger) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					log.ErrorContext(r.Context(), "stream setup failed")
+					_ = http.NewResponseController(w).Flush()
+					_, _ = w.Write([]byte("data"))
+				}
+			},
+			wantMarker: "error_log",
+			wantSent:   1,
+		},
+		{
+			name: "body written with ReadFrom",
+			handler: func(log *slog.Logger) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					log.ErrorContext(r.Context(), "cache unavailable")
+					// LimitReader has no WriteTo, so io.Copy uses the writer's ReadFrom.
+					_, _ = io.Copy(w, io.LimitReader(strings.NewReader("body"), 4))
+				}
+			},
+			wantMarker: "error_log",
+			wantSent:   1,
+		},
+		{
+			name: "panic sends no response",
+			handler: func(log *slog.Logger) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					panic("boom")
 				}
 			},
 			wantMissed: 1,
@@ -185,4 +234,65 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+func TestFlushMarkerDisabled(t *testing.T) {
+	out := &syncBuffer{}
+	rec := flightrec.New(flightrec.Options{
+		Next:               slog.NewJSONHandler(out, nil),
+		DisableFlushMarker: true,
+	})
+	srv := httptest.NewServer(flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})))
+	t.Cleanup(srv.Close)
+
+	resp := get(t, srv.URL, nil)
+	if got := resp.Header.Get(flightrec.FlushHeader); got != "" {
+		t.Errorf("%s = %q with DisableFlushMarker", flightrec.FlushHeader, got)
+	}
+	if st := rec.Stats(); st.FlushMarkersSent != 0 || st.FlushMarkersMissed != 0 || st.ScopesFlushed != 1 {
+		t.Errorf("want the scope flushed without marker counters, got %+v", st)
+	}
+}
+
+func TestFlushMarkerForSlowRequest(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+
+	rec := flightrec.New(flightrec.Options{
+		Next:      slog.NewJSONHandler(io.Discard, nil),
+		SlowAfter: time.Second,
+		Now:       clock,
+	})
+	srv := httptest.NewServer(flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		advance(2 * time.Second)
+		_, _ = w.Write([]byte("slow but successful"))
+	})))
+	t.Cleanup(srv.Close)
+
+	resp := get(t, srv.URL, nil)
+	if got := resp.Header.Get(flightrec.FlushHeader); got != "slow_request" {
+		t.Errorf("%s = %q, want slow_request", flightrec.FlushHeader, got)
+	}
+}
+
+func TestFlushMarkerLeavesCallerHeadersIntact(t *testing.T) {
+	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(io.Discard, nil)})
+	var seen string
+	h := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get(flightrec.FlushHeader)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(flightrec.FlushHeader, "forced_by_client")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if seen != "" {
+		t.Errorf("handler saw %q", seen)
+	}
+	if got := req.Header.Get(flightrec.FlushHeader); got != "forced_by_client" {
+		t.Errorf("caller's request header was modified: %q", got)
+	}
 }

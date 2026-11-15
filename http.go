@@ -13,24 +13,54 @@ import (
 )
 
 // FlushHeader is the response header a triggered scope sets so that callers
-// can flush their own buffers for the same request. Its value is the flush
-// reason. See Transport.
+// can flush their own buffers for the same request.
+//
+// Its value is a built-in flush reason such as error_log, http_502, panic or
+// slow_request. Reasons passed to Flush by application code are sent as
+// explicit_flush, so custom reason text never leaves the process. Set
+// Options.DisableFlushMarker on services that answer clients outside your
+// system.
 //
 // HTTPMiddleware removes FlushHeader from incoming requests before the handler
-// runs: only responses from services you call can trigger a flush, never a
-// request from a client.
+// runs, so a handler that proxies requests cannot forward one.
 const FlushHeader = "Flightrec-Flush"
 
-// maxFlushReasonLen bounds the length of the FlushHeader value.
-const maxFlushReasonLen = 64
+// markerReasons are the reasons sent unchanged in FlushHeader. Any other
+// reason is sent as explicit_flush.
+var markerReasons = map[string]bool{
+	"error_log": true, "panic": true, "slow_request": true, "grpc_error": true,
+	"http_500": true, "http_502": true, "http_503": true, "http_504": true, "http_5xx": true,
+	"span_error": true, "span_exception": true, "slow_trace": true,
+	"explicit_flush": true,
+}
+
+// markerReason maps a scope's flush reason to the value sent in FlushHeader.
+// Prefixes added by cross-service flushes (downstream:, remote:) are removed,
+// so the value names the original failure and does not grow at each hop.
+func markerReason(reason string) string {
+	for {
+		switch {
+		case strings.HasPrefix(reason, "downstream:"):
+			reason = reason[len("downstream:"):]
+		case strings.HasPrefix(reason, "remote:"):
+			reason = reason[len("remote:"):]
+		default:
+			if markerReasons[reason] {
+				return reason
+			}
+			return "explicit_flush"
+		}
+	}
+}
 
 // HTTPMiddleware wraps an http.Handler and opens a flight-recorder Scope for
 // every incoming request.
 //
-// When the scope is triggered before the response headers are written, or
-// the handler writes a status of 500 or above, the response carries
-// FlushHeader with the flush reason. A scope triggered after the headers are
-// written cannot add it; Stats.FlushMarkersMissed counts those.
+// When the scope is triggered before the response headers are written, the
+// handler writes a status of 500 or above, or the request has already run for
+// SlowAfter, the response carries FlushHeader. A scope triggered after the
+// headers are written cannot add it, and a panic sends no response at all;
+// Stats.FlushMarkersMissed counts both.
 //
 // The scope is keyed by the request's trace ID (extracted from W3C traceparent,
 // X-Trace-Id, or X-Request-Id headers, or generated when absent). The buffer
@@ -46,7 +76,11 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 				Method:  r.Method,
 				Path:    r.URL.Path,
 			})
-			r.Header.Del(FlushHeader)
+			if _, ok := r.Header[FlushHeader]; ok {
+				// Clone so the caller's header map is left as received.
+				r = r.Clone(r.Context())
+				r.Header.Del(FlushHeader)
+			}
 			rw, sw := wrapResponseWriter(w, sc)
 
 			defer func() {
@@ -56,6 +90,7 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 						panic(p)
 					}
 					sc.Trigger("panic")
+					sw.finishPanic()
 					sc.End(ctx, http.StatusInternalServerError)
 					panic(p)
 				}
@@ -128,8 +163,12 @@ func (w *statusResponseWriter) beforeHeaders(code int) {
 	if code >= 500 {
 		w.scope.Trigger(httpStatusReason(code))
 	}
+	w.scope.triggerIfSlow()
+	if w.scope.state.opts.DisableFlushMarker {
+		return
+	}
 	if triggered, reason := w.scope.TriggerState(); triggered {
-		w.Header().Set(FlushHeader, sanitizeFlushReason(reason))
+		w.Header().Set(FlushHeader, markerReason(reason))
 		w.markerSent = true
 		w.scope.state.flushMarkersSent.Add(1)
 	}
@@ -147,7 +186,24 @@ func (w *statusResponseWriter) finish() {
 		w.beforeHeaders(w.status)
 		return
 	}
-	if triggered, _ := w.scope.TriggerState(); triggered && !w.markerSent {
+	w.scope.triggerIfSlow()
+	w.countMissed()
+}
+
+// finishPanic counts the marker as missed: net/http sends no response for a
+// handler that panics.
+func (w *statusResponseWriter) finishPanic() {
+	if w.scope == nil || w.hijacked {
+		return
+	}
+	w.countMissed()
+}
+
+func (w *statusResponseWriter) countMissed() {
+	if w.markerSent || w.scope.state.opts.DisableFlushMarker {
+		return
+	}
+	if triggered, _ := w.scope.TriggerState(); triggered {
 		w.scope.state.flushMarkersMissed.Add(1)
 	}
 }
@@ -170,27 +226,6 @@ func (w *statusResponseWriter) Write(b []byte) (int, error) {
 		w.beforeHeaders(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(b)
-}
-
-// sanitizeFlushReason limits a flush reason to characters that are safe in a
-// header value and to maxFlushReasonLen bytes.
-func sanitizeFlushReason(reason string) string {
-	if len(reason) > maxFlushReasonLen {
-		reason = reason[:maxFlushReasonLen]
-	}
-	b := []byte(reason)
-	for i, c := range b {
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
-			c == '_', c == '-', c == '.', c == ':':
-		default:
-			b[i] = '_'
-		}
-	}
-	if len(b) == 0 {
-		return "triggered"
-	}
-	return string(b)
 }
 
 func (w *statusResponseWriter) Unwrap() http.ResponseWriter {

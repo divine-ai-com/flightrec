@@ -88,6 +88,11 @@ type Options struct {
 	// (64 MB) when <= 0.
 	MaxTotal int64
 
+	// DisableFlushMarker stops HTTPMiddleware from setting the FlushHeader
+	// response header. Set it on services whose responses go to clients
+	// outside your system, such as a public API or an edge gateway.
+	DisableFlushMarker bool
+
 	// DisableHealthySummary disables writing the single summary log line when
 	// a healthy (untriggered) scope completes.
 	DisableHealthySummary bool
@@ -516,6 +521,19 @@ func (s *Scope) Trigger(reason string) {
 
 	if notify && s.state != nil {
 		s.state.notifyScopeTrigger(s, tid, reason)
+	}
+}
+
+// triggerIfSlow triggers the scope with reason slow_request if it has run for
+// at least Options.SlowAfter. It lets the HTTP middleware decide before the
+// response headers are sent, instead of only at End.
+func (s *Scope) triggerIfSlow() {
+	st := s.state
+	if st == nil || st.opts.SlowAfter <= 0 {
+		return
+	}
+	if st.now().Sub(s.startTime) >= st.opts.SlowAfter {
+		s.Trigger("slow_request")
 	}
 }
 
