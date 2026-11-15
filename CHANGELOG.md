@@ -11,6 +11,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 ### Fixed
 - An informational response such as `103 Early Hints` no longer becomes the recorded status of the request; the final status is used for the 5xx trigger and the summary line (#47).
 
+### Security
+- Trace IDs taken from `X-Trace-Id`, `X-Request-Id` and the matching gRPC metadata are limited to 128 bytes of `[A-Za-z0-9_.:-]`; other values are ignored and a trace ID is generated. They are written to every log record and identify requests across services (#49).
+
 ## [grpcflightrec/v0.2.1, otelflightrec/v0.2.1] - 2026-11-15
 
 The core module is unchanged at `v0.2.0`.

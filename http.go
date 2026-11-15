@@ -75,7 +75,10 @@ func MarkerValue(reason string) (value string, ok bool) {
 // Stats.FlushMarkersMissed counts both.
 //
 // The scope is keyed by the request's trace ID (extracted from W3C traceparent,
-// X-Trace-Id, or X-Request-Id headers, or generated when absent). The buffer
+// X-Trace-Id, or X-Request-Id headers, or generated when absent). X-Trace-Id
+// and X-Request-Id values longer than 128 bytes or containing characters
+// outside [A-Za-z0-9_.:-] are ignored. Edge services should not take trace
+// IDs from untrusted clients at all. The buffer
 // is flushed if an error log is recorded, the response status is 5xx, the
 // handler panics (except http.ErrAbortHandler), the duration exceeds SlowAfter,
 // or Flush(ctx, reason) is called explicitly.
@@ -121,13 +124,37 @@ func extractHTTPTraceID(h http.Header) string {
 			return tid
 		}
 	}
-	if tid := strings.TrimSpace(h.Get("X-Trace-Id")); tid != "" {
+	if tid := strings.TrimSpace(h.Get("X-Trace-Id")); validTraceID(tid) {
 		return tid
 	}
-	if rid := strings.TrimSpace(h.Get("X-Request-Id")); rid != "" {
+	if rid := strings.TrimSpace(h.Get("X-Request-Id")); validTraceID(rid) {
 		return rid
 	}
 	return ""
+}
+
+// maxTraceIDLen bounds trace IDs taken from X-Trace-Id and X-Request-Id.
+const maxTraceIDLen = 128
+
+// validTraceID reports whether a trace ID taken from a request header or
+// metadata is usable: 1 to maxTraceIDLen bytes of [A-Za-z0-9_.:-]. The ID is
+// written to every log record and, with cross-service flush, identifies
+// scopes across processes, so arbitrary client input is not accepted. An
+// invalid ID is replaced by a generated one.
+func validTraceID(id string) bool {
+	if id == "" || len(id) > maxTraceIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '_', c == '-', c == '.', c == ':':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // parseW3CTraceparent extracts the 32-hex-char trace-id from a W3C traceparent

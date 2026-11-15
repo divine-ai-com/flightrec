@@ -38,7 +38,8 @@ func WithIncomingMetadata(ctx context.Context, md map[string][]string) context.C
 
 // ExtractTraceIDFromMetadata extracts a trace ID from a gRPC-style metadata
 // map (checking "traceparent", "x-trace-id", and "x-request-id"
-// case-insensitively).
+// case-insensitively). Values of x-trace-id and x-request-id longer than 128
+// bytes or containing characters outside [A-Za-z0-9_.:-] are ignored.
 func ExtractTraceIDFromMetadata(md map[string][]string) string {
 	if len(md) == 0 {
 		return ""
@@ -53,7 +54,7 @@ func ExtractTraceIDFromMetadata(md map[string][]string) string {
 	for _, key := range []string{"x-trace-id", "x-request-id"} {
 		if vals := lookupMetadataValues(md, key); len(vals) > 0 {
 			for _, v := range vals {
-				if trimmed := strings.TrimSpace(v); trimmed != "" {
+				if trimmed := strings.TrimSpace(v); validTraceID(trimmed) {
 					return trimmed
 				}
 			}
