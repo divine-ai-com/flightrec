@@ -1,0 +1,25 @@
+# Three services in separate containers, connected through Redis.
+#
+#   docker compose up --build
+#   curl -s localhost:8081/checkout?fail=sync
+#   curl -s localhost:8081/checkout?fail=async
+#   docker compose logs gateway orders inventory
+services:
+  redis:
+    image: redis:7-alpine
+
+  inventory:
+    build: { context: ../.., dockerfile: examples/cross-service/Dockerfile }
+    command: ["-role", "inventory", "-listen", ":8080", "-redis", "redis:6379"]
+    depends_on: [redis]
+
+  orders:
+    build: { context: ../.., dockerfile: examples/cross-service/Dockerfile }
+    command: ["-role", "orders", "-listen", ":8080", "-next", "http://inventory:8080", "-redis", "redis:6379"]
+    depends_on: [redis, inventory]
+
+  gateway:
+    build: { context: ../.., dockerfile: examples/cross-service/Dockerfile }
+    command: ["-role", "gateway", "-listen", ":8080", "-next", "http://orders:8080", "-redis", "redis:6379"]
+    depends_on: [redis, orders]
+    ports: ["8081:8080"]

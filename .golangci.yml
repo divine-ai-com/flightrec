@@ -45,8 +45,8 @@ linters:
       # Example and test code may ignore errors from writes to buffers and Shutdown.
       - path: _test\.go$
         linters: [errcheck, gosec]
-      # The demo is not library code.
-      - path: cmd/demo/
+      # The demo and examples are not library code.
+      - path: (cmd/demo|examples)/
         linters: [gosec]
 
 issues:
