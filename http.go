@@ -88,7 +88,9 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var traceID string
-			if !rec.state.opts.IgnoreRequestTraceIDs {
+			// An active span (OpenTelemetry middleware in front) already
+			// carries the request's trace; headers are read only without one.
+			if !rec.state.opts.IgnoreRequestTraceIDs && !rec.state.extractTraceContext(r.Context()).HasTraceID() {
 				traceID = extractHTTPTraceID(r.Header)
 			}
 			ctx, sc := StartScope(r.Context(), rec, ScopeMeta{
@@ -164,28 +166,40 @@ func validTraceID(id string) bool {
 	return true
 }
 
-// parseW3CTraceparent extracts the 32-hex-char trace-id from a W3C traceparent
-// header ("00-<32hex>-<16hex>-<2hex>").
+// parseW3CTraceparent returns the trace ID of a W3C traceparent header
+// ("00-<32hex>-<16hex>-<2hex>"), or "" if the value is not valid as the W3C
+// Trace Context specification defines it: lowercase hex, non-zero trace and
+// parent IDs, version ff rejected, and exactly four fields for version 00.
+// A higher version may append fields after a dash.
 func parseW3CTraceparent(tp string) string {
-	parts := strings.Split(tp, "-")
-	if len(parts) < 4 || len(parts[1]) != 32 {
+	const n = 55 // len("00-") + 32 + len("-") + 16 + len("-") + 2
+	if len(tp) < n || tp[2] != '-' || tp[35] != '-' || tp[52] != '-' {
 		return ""
 	}
-	tid := parts[1]
-	allZero := true
-	for i := 0; i < len(tid); i++ {
-		c := tid[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return ""
-		}
-		if c != '0' {
-			allZero = false
-		}
-	}
-	if allZero {
+	version, tid, pid, flags := tp[0:2], tp[3:35], tp[36:52], tp[53:55]
+	if !lowerHex(version) || version == "ff" || !lowerHex(flags) {
 		return ""
 	}
-	return strings.ToLower(tid)
+	if version == "00" && len(tp) != n || version != "00" && len(tp) > n && tp[n] != '-' {
+		return ""
+	}
+	if !lowerHex(tid) || !lowerHex(pid) || strings.Trim(tid, "0") == "" || strings.Trim(pid, "0") == "" {
+		return ""
+	}
+	return tid
+}
+
+// lowerHex reports whether s is non-empty and consists of 0-9 and a-f.
+func lowerHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 type statusResponseWriter struct {

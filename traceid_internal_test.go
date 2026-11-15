@@ -87,20 +87,70 @@ func TestMiddlewareTraceIDSource(t *testing.T) {
 }
 
 func TestGRPCTraceIDSource(t *testing.T) {
+	st := func(o Options) *recorderState { o.Next = slog.DiscardHandler; return New(o).state }
+	plain, ignore := st(Options{}), st(Options{IgnoreRequestTraceIDs: true})
 	ctx := WithIncomingMetadata(context.Background(), map[string][]string{"x-request-id": {"req-9"}})
-	if got := resolveGRPCTraceID(ctx, nil, false); got != "req-9" {
+	if got := resolveGRPCTraceID(ctx, plain, nil); got != "req-9" {
 		t.Errorf("metadata trace ID = %q, want req-9", got)
 	}
-	if got := resolveGRPCTraceID(ctx, nil, true); got != "" {
+	if got := resolveGRPCTraceID(ctx, ignore, nil); got != "" {
 		t.Errorf("with ignore set, trace ID = %q, want empty (generated later)", got)
 	}
 	custom := func(context.Context) string { return "custom-id" }
-	if got := resolveGRPCTraceID(ctx, custom, true); got != "" {
+	if got := resolveGRPCTraceID(ctx, ignore, custom); got != "" {
 		t.Errorf("with ignore set, a custom extractor was used: %q", got)
 	}
 	bad := func(context.Context) string { return "has space" }
-	if got := resolveGRPCTraceID(ctx, bad, false); got != "req-9" {
+	if got := resolveGRPCTraceID(ctx, plain, bad); got != "req-9" {
 		t.Errorf("invalid custom extractor result was used: %q", got)
+	}
+	// An active span wins over metadata: StartScope takes the span's trace.
+	span := st(Options{TraceExtractor: func(context.Context) TraceContext { return TraceContext{TraceID: [16]byte{7}} }})
+	if got := resolveGRPCTraceID(ctx, span, custom); got != "" {
+		t.Errorf("with an active span, trace ID = %q, want empty (taken from the span)", got)
+	}
+}
+
+// TestActiveSpanBeatsRequestHeaders checks that HTTPMiddleware files the
+// scope under the active span's trace, not under a request header such as
+// the X-Request-Id a proxy adds.
+func TestActiveSpanBeatsRequestHeaders(t *testing.T) {
+	spanTC := TraceContext{TraceID: [16]byte{0xab, 1}}
+	rec := New(Options{Next: slog.DiscardHandler, TraceExtractor: func(context.Context) TraceContext { return spanTC }})
+	var got string
+	h := HTTPMiddleware(rec)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = TraceID(r.Context()) }))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", "lb-req-1")
+	req.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if got != spanTC.TraceIDHex() {
+		t.Errorf("trace ID = %q, want the active span's %q", got, spanTC.TraceIDHex())
+	}
+}
+
+func TestParseW3CTraceparent(t *testing.T) {
+	const tid = "4bf92f3577b34da6a3ce929d0e0e4736"
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"00-" + tid + "-00f067aa0ba902b7-01", tid},
+		{"01-" + tid + "-00f067aa0ba902b7-01", tid},
+		{"01-" + tid + "-00f067aa0ba902b7-01-extra", tid},
+		{"cc-" + tid + "-00f067aa0ba902b7-01-what-the-future-holds", tid},
+		{"00-" + tid + "-00f067aa0ba902b7-01-extra", ""}, // version 00 has exactly four fields
+		{"01-" + tid + "-00f067aa0ba902b7-01x", ""},      // a later field must follow a dash
+		{"ff-" + tid + "-00f067aa0ba902b7-01", ""},       // version ff is invalid
+		{"00-" + strings.ToUpper(tid) + "-00f067aa0ba902b7-01", ""},
+		{"00-" + tid + "-0000000000000000-01", ""}, // zero parent ID
+		{"00-00000000000000000000000000000000-00f067aa0ba902b7-01", ""},
+		{"00-" + tid + "-00f067aa0ba902b7-0g", ""},
+		{"0-" + tid + "-00f067aa0ba902b7-01", ""},
+		{"00_" + tid + "-00f067aa0ba902b7-01", ""},
+		{"", ""},
+	} {
+		if got := parseW3CTraceparent(tc.in); got != tc.want {
+			t.Errorf("parseW3CTraceparent(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 

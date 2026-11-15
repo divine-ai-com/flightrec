@@ -92,7 +92,7 @@ func InvokeGRPCUnary(
 	req any,
 	handler GRPCUnaryHandler,
 ) (resp any, err error) {
-	traceID := resolveGRPCTraceID(ctx, extractTraceID, rec.state.opts.IgnoreRequestTraceIDs)
+	traceID := resolveGRPCTraceID(ctx, rec.state, extractTraceID)
 	scopeCtx, sc := StartScope(ctx, rec, ScopeMeta{
 		TraceID: traceID,
 		Method:  "gRPC",
@@ -128,7 +128,7 @@ func InvokeGRPCStream(
 	extractTraceID GRPCMetadataExtractor,
 	handler GRPCStreamHandler,
 ) (err error) {
-	traceID := resolveGRPCTraceID(ctx, extractTraceID, rec.state.opts.IgnoreRequestTraceIDs)
+	traceID := resolveGRPCTraceID(ctx, rec.state, extractTraceID)
 	scopeCtx, sc := StartScope(ctx, rec, ScopeMeta{
 		TraceID: traceID,
 		Method:  "gRPC",
@@ -155,10 +155,15 @@ func InvokeGRPCStream(
 	return handler(scopeCtx)
 }
 
-func resolveGRPCTraceID(ctx context.Context, extractTraceID GRPCMetadataExtractor, ignoreRequestIDs bool) string {
-	if ignoreRequestIDs {
+func resolveGRPCTraceID(ctx context.Context, st *recorderState, extractTraceID GRPCMetadataExtractor) string {
+	if st.opts.IgnoreRequestTraceIDs {
 		// Extractors read incoming metadata, which the client controls.
 		return TraceID(ctx)
+	}
+	if st.extractTraceContext(ctx).HasTraceID() {
+		// An active span (OpenTelemetry interceptor in front) already carries
+		// the request's trace; StartScope takes it from ctx.
+		return ""
 	}
 	if extractTraceID != nil {
 		if tid := extractTraceID(ctx); validTraceID(tid) {
