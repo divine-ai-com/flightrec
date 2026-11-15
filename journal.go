@@ -216,6 +216,19 @@ func (st *recorderState) journalEnd(sc *Scope) {
 	js.file.Append(sc.jid, journal.KindEnd, sc.jid, nil)
 }
 
+// journalRekey records that sc adopted a span's trace ID, so recovery labels
+// its records the way a live flush would.
+func (st *recorderState) journalRekey(sc *Scope, traceID, alias string) {
+	js := sc.journal
+	if js == nil || st.journal.Load() != js {
+		return
+	}
+	bp := journalScratch.Get().(*[]byte)
+	b := appendScopeRekey((*bp)[:0], traceID, alias)
+	js.file.Append(sc.jid, journal.KindRekey, sc.jid, b)
+	putScratch(bp, b)
+}
+
 // journalStats fills the journal fields of s.
 func (st *recorderState) journalStats(s *Stats) {
 	s.JournalRecoveredScopes = st.journalRecoveredScopes.Load()

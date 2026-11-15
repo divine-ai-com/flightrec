@@ -57,6 +57,7 @@ const (
 	KindPad      Kind = 4 // fills the rest of a block
 	KindRetained Kind = 5 // reserved for retained scopes
 	KindDropped  Kind = 6 // a record of the scope was too large to journal; payload empty
+	KindRekey    Kind = 7 // the scope adopted a span's trace ID; payload: new ID and alias
 )
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
@@ -219,4 +220,4 @@ func decodeBlockHeader(b []byte, salt uint64) (logical uint64, started int64, ok
 }
 
 // validKind reports whether k is a kind a writer produces as an entry.
-func validKind(k Kind) bool { return k >= KindStart && k <= KindDropped }
+func validKind(k Kind) bool { return k >= KindStart && k <= KindRekey }

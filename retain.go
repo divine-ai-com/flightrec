@@ -21,6 +21,7 @@ const maxRetainedPerTrace = 8
 // retainedScope is the buffer of a healthy scope kept for Options.Retain.
 type retainedScope struct {
 	traceID    string
+	alias      string // a request header ID the scope also answers to
 	entries    []bufferedEntry
 	bytes      int64
 	truncated  bool
@@ -39,10 +40,11 @@ type retainedSet struct {
 }
 
 // retain moves the entries of a healthy scope into the retained set.
-func (st *recorderState) retain(traceID string, entries []bufferedEntry, truncated bool, dropped uint64, now time.Time) {
+func (st *recorderState) retain(traceID, alias string, entries []bufferedEntry, truncated bool, dropped uint64, now time.Time) {
 	snapshotBytes := snapshotAnyValues(entries)
 	rs := &retainedScope{
 		traceID:    traceID,
+		alias:      alias,
 		entries:    entries,
 		truncated:  truncated,
 		dropped:    dropped,
@@ -71,8 +73,18 @@ func (st *recorderState) retain(traceID string, entries []bufferedEntry, truncat
 	if same := set.byTrace[traceID]; len(same) >= maxRetainedPerTrace {
 		st.dropRetainedLocked(same[0], false)
 	}
+	if alias != "" {
+		// The cap applies to the alias as well: many scopes can share one
+		// forwarded request ID while each has its own span trace.
+		if same := set.byTrace[alias]; len(same) >= maxRetainedPerTrace {
+			st.dropRetainedLocked(same[0], false)
+		}
+	}
 	rs.elem = set.order.PushBack(rs)
 	set.byTrace[traceID] = append(set.byTrace[traceID], rs)
+	if alias != "" {
+		set.byTrace[alias] = append(set.byTrace[alias], rs)
+	}
 	set.bytes += rs.bytes
 	for set.bytes > st.opts.MaxRetained && set.order.Len() > 0 {
 		st.dropRetainedLocked(set.order.Front().Value.(*retainedScope), false)
@@ -131,17 +143,22 @@ func (st *recorderState) removeRetainedLocked(rs *retainedScope) {
 	set := &st.retained
 	set.order.Remove(rs.elem)
 	set.bytes -= rs.bytes
-	same := set.byTrace[rs.traceID]
-	for i, other := range same {
-		if other == rs {
-			same = append(same[:i], same[i+1:]...)
-			break
+	for _, key := range []string{rs.traceID, rs.alias} {
+		if key == "" {
+			continue
 		}
-	}
-	if len(same) == 0 {
-		delete(set.byTrace, rs.traceID)
-	} else {
-		set.byTrace[rs.traceID] = same
+		same := set.byTrace[key]
+		for i, other := range same {
+			if other == rs {
+				same = append(same[:i], same[i+1:]...)
+				break
+			}
+		}
+		if len(same) == 0 {
+			delete(set.byTrace, key)
+		} else {
+			set.byTrace[key] = same
+		}
 	}
 }
 
@@ -216,14 +233,18 @@ func (st *recorderState) flushRetained(ctx context.Context, traceID, reason stri
 	for _, rs := range scopes {
 		st.scopesFlushed.Add(1)
 		st.retainedFlushed.Add(1)
-		st.writeFlushed(ctx, rs.entries, rs.traceID, reason, rs.truncated, rs.dropped)
+		st.writeFlushed(ctx, rs.entries, rs.traceID, rs.alias, reason, rs.truncated, rs.dropped)
 	}
 	return len(scopes)
 }
 
 // writeFlushed writes buffered entries to Next in order, tagged with the
 // flush reason, restoring each entry's log-time trace context.
-func (st *recorderState) writeFlushed(ctx context.Context, entries []bufferedEntry, traceID, reason string, truncated bool, dropped uint64) {
+//
+// alias, when set, is the request header ID the scope was known by before it
+// adopted a span's trace; it is written as flightrec.request_id so the logs
+// can still be found by it.
+func (st *recorderState) writeFlushed(ctx context.Context, entries []bufferedEntry, traceID, alias, reason string, truncated bool, dropped uint64) {
 	scopeTraceBytes, hasScopeTraceBytes := ParseTraceIDHex(traceID)
 	if len(entries) == 0 && truncated {
 		// Every buffered record was dropped (memory limits, or one record
@@ -236,6 +257,9 @@ func (st *recorderState) writeFlushed(ctx context.Context, entries []bufferedEnt
 			slog.Bool("flightrec.truncated", true),
 			slog.Uint64("flightrec.dropped_records", dropped),
 		)
+		if alias != "" {
+			rec.AddAttrs(slog.String("flightrec.request_id", alias))
+		}
 		tctx := ctx
 		if hasScopeTraceBytes {
 			tctx = st.injectTraceContext(ctx, TraceContext{TraceID: scopeTraceBytes})
@@ -249,6 +273,9 @@ func (st *recorderState) writeFlushed(ctx context.Context, entries []bufferedEnt
 			tc.TraceID = scopeTraceBytes
 		}
 		outRec := e.recorder.buildOutputRecord(e.rec, traceID, tc.SpanIDHex(), reason, truncated && i == 0, dropped)
+		if alias != "" {
+			outRec.AddAttrs(slog.String("flightrec.request_id", alias))
+		}
 		_ = st.baseNext.Handle(st.injectTraceContext(ctx, tc), outRec)
 	}
 	st.recordsFlushed.Add(uint64(len(entries)))

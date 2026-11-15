@@ -212,9 +212,12 @@ func (h *notifierHub) announced(traceID string) (string, bool) {
 	return h.received.get(traceID)
 }
 
-// scopeRekeyed moves an active scope to its new trace ID.
-func (h *notifierHub) scopeRekeyed(sc *Scope, oldID, newID string) {
-	h.removeActive(sc, oldID)
+// scopeRekeyed moves an active scope to its new trace ID, or, when the old ID
+// stays an alias, indexes it under both.
+func (h *notifierHub) scopeRekeyed(sc *Scope, oldID, newID string, keepOld bool) {
+	if !keepOld {
+		h.removeActive(sc, oldID)
+	}
 	h.scopeStarted(sc, newID)
 	// End may have run between the trace ID change and the insert above.
 	sc.mu.Lock()
@@ -222,6 +225,7 @@ func (h *notifierHub) scopeRekeyed(sc *Scope, oldID, newID string) {
 	sc.mu.Unlock()
 	if closed {
 		h.removeActive(sc, newID)
+		h.removeActive(sc, oldID)
 	}
 }
 
