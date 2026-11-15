@@ -326,7 +326,7 @@ slog.Info("flightrec",
 | `flightrec.trace_id` | every record in a request | The request's trace ID |
 | `flightrec.span_id` | records logged inside an active OpenTelemetry span | The 16-hex-char ID of the span active at log time |
 | `flightrec.flush_reason` | flushed records | Why the request was kept (see below) |
-| `flightrec.truncated`, `flightrec.dropped_records` | first flushed record, if records were lost | The buffer hit a memory limit |
+| `flightrec.truncated`, `flightrec.dropped_records` | first flushed record, if records were lost, or a `buffered records dropped` line if none is left | The buffer hit a memory limit; `dropped_records` counts the records lost, wherever they were |
 | `flightrec.recovered`, `flightrec.recovered_host`, `flightrec.recovered_process_start` | records recovered after a crash | Written by the next start of a killed process (`StartJournal`) |
 | `flightrec.truncated` | first recovered record of a request, if its oldest records were overwritten in the journal | The journal ring wrapped during the request |
 | `flightrec.recovered_scope` | records recovered for a request with no trace ID | Groups the lines of that request |

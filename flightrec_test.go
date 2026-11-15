@@ -1152,3 +1152,31 @@ func TestFailedRequestThatLostEveryRecordSaysSo(t *testing.T) {
 		marker(t, buf.String(), 4)
 	})
 }
+
+// TestTruncationMarkOnFirstFlushedRecord pins where the truncation mark goes
+// when a record in the middle is dropped for being larger than MaxPerScope:
+// on the first record written, which carries the request's drop count.
+func TestTruncationMarkOnFirstFlushedRecord(t *testing.T) {
+	var buf bytes.Buffer
+	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(&buf, nil), BufferLeveler: slog.LevelDebug, MaxPerScope: 8 << 10})
+	log := slog.New(rec)
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t-mid"})
+	log.DebugContext(ctx, "small-1")
+	log.DebugContext(ctx, "huge", "blob", strings.Repeat("x", 16<<10))
+	log.DebugContext(ctx, "small-2")
+	sc.End(ctx, 500)
+
+	var flushed []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		m := map[string]any{}
+		if json.Unmarshal([]byte(l), &m) == nil && m["flightrec.flush_reason"] != nil {
+			flushed = append(flushed, m)
+		}
+	}
+	if len(flushed) != 2 || flushed[0]["msg"] != "small-1" || flushed[1]["msg"] != "small-2" {
+		t.Fatalf("flushed %v", flushed)
+	}
+	if flushed[0]["flightrec.truncated"] != true || flushed[0]["flightrec.dropped_records"] != float64(1) || flushed[1]["flightrec.truncated"] != nil {
+		t.Errorf("marks: first %v, second %v", flushed[0], flushed[1])
+	}
+}
