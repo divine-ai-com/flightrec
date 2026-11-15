@@ -210,7 +210,7 @@ func runDemo() error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	journal := filepath.Join(dir, "flightrec.journal")
 
 	fmt.Println("== starting the server")
