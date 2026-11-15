@@ -60,17 +60,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	resp.Header.Del(FlushHeader)
 
-	sc := scopeFromContext(req.Context())
-	if sc == nil {
-		return resp, err
-	}
-	if len(values) != 1 || !ValidMarker(values[0]) {
-		sc.state.markersRejected.Add(1)
-		return resp, err
-	}
-	if sc.trigger("downstream:" + values[0]) {
-		sc.state.downstreamTriggers.Add(1)
-	}
+	ReceiveMarker(req.Context(), values)
 	return resp, err
 }
 
