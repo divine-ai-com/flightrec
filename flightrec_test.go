@@ -955,7 +955,7 @@ func TestErrAbortHandlerNotPanicFlush(t *testing.T) {
 		mw.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/stream", nil))
 	}()
 
-	if recovered != http.ErrAbortHandler {
+	if err, ok := recovered.(error); !ok || !errors.Is(err, http.ErrAbortHandler) {
 		t.Fatalf("expected http.ErrAbortHandler to be re-panicked, got %v", recovered)
 	}
 	if len(out.Lines(t)) != 0 {
