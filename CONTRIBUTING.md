@@ -21,22 +21,24 @@ Issues labeled [`good first issue`](https://github.com/divine-ai-com/flightrec/l
 
 | Path | Contents |
 | --- | --- |
-| `*.go` at the root | The core module: `Recorder`, scopes, HTTP middleware |
-| `grpcflightrec/` | gRPC interceptors, a separate module |
-| `otelflightrec/` | OpenTelemetry span processor and log bridge, a separate module |
-| `cmd/demo/` | The volume and fidelity demo used in the README |
-| `docs/` | Quickstart, design notes and troubleshooting |
+| `*.go` at the root | The core module: `Recorder`, scopes, HTTP middleware, notifier hub, journal |
+| `internal/journal/` | The crash journal file format, writer and reader |
+| `grpcflightrec/`, `otelflightrec/` | gRPC interceptors; OpenTelemetry span processor and log bridge (separate modules) |
+| `notifier/` | Notifiers: `memnotifier` (core module), `redisnotifier` and `natsnotifier` (separate modules) |
+| `examples/`, `cmd/demo/` | Runnable examples and the volume demo, all run in CI |
+| `benchmarks/otelexport/` | otelflightrec benchmarks against a real OTLP exporter (unpublished module) |
+| `docs/` | Reference, guides, benchmarks, design and proposals; `docs/media/src` generates the README visuals |
 
 ## Development
 
 Requires the two latest Go releases (currently 1.26 and 1.27).
 
 ```bash
-go test -race ./...
-(cd grpcflightrec && go test -race ./...)
-(cd otelflightrec && go test -race ./...)
-go test -run='^$' -bench=. -benchmem ./...
-go run ./cmd/demo
+make test    # every module, with the race detector
+make cover   # coverage floors for core and otelflightrec
+make lint    # needs golangci-lint v2.15.0
+make bench
+make demo
 ```
 
 For benchmark comparisons, run each side with `-count=10` and compare with [benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat).
@@ -45,9 +47,9 @@ For benchmark comparisons, run each side with `-count=10` and compare with [benc
 
 - Branch from `main` with a name like `fix/short-description` or `feat/short-description`.
 - Keep one logical change per PR, closing one issue.
-- Title the PR as a [Conventional Commit](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`, lower case, imperative, no period. Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`. Scopes: `core`, `http`, `grpc`, `otel`, `notifier`. The title becomes the commit message on `main`.
+- Title the PR as a [Conventional Commit](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`, lower case, imperative, no period. Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`. Scopes: `core`, `http`, `grpc`, `otel`, `notifier`, `deps`. The title becomes the commit message on `main`.
 - Fill in the PR template: what and why, the issue it closes, and how it was tested.
-- Add an entry under `## [Unreleased]` in `CHANGELOG.md`, unless the change is invisible to users.
+- Add an entry of one or two lines under `## [Unreleased]` in `CHANGELOG.md`, unless the change is invisible to users; detail belongs in the PR.
 - A bug fix includes a test that fails without the fix.
 - Resolve every review thread before merge. PRs are squash-merged.
 
