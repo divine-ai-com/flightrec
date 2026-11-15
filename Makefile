@@ -1,6 +1,6 @@
 # Developer and CI entry points. CI runs these same targets.
 
-MODULES := . grpcflightrec otelflightrec notifier/redisnotifier notifier/natsnotifier examples/cross-service
+MODULES := . grpcflightrec otelflightrec notifier/redisnotifier notifier/natsnotifier examples/cross-service benchmarks/otelexport
 COVER_MIN_CORE := 85
 COVER_MIN_OTEL := 85
 COVERPROFILE := coverage.out

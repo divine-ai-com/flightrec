@@ -14,6 +14,11 @@ import (
 	"github.com/divine-ai-com/flightrec/otelflightrec"
 )
 
+// These benchmarks measure processor overhead only: Next is a no-op, so the
+// baseline never serializes or sends a span. For the cost against a real
+// export path (BatchSpanProcessor and the OTLP/HTTP exporter), see the
+// benchmarks/otelexport module at the repository root.
+
 type noopSpanProcessor struct{}
 
 func (noopSpanProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
@@ -22,7 +27,8 @@ func (noopSpanProcessor) Shutdown(context.Context) error                  { retu
 func (noopSpanProcessor) ForceFlush(context.Context) error                { return nil }
 
 // BenchmarkPlainOTel_AlwaysExport measures baseline OpenTelemetry tracing where
-// a request creates 1 root span and 10 child spans and exports all 11 spans.
+// a request creates 1 root span and 10 child spans and hands all 11 to a
+// no-op processor.
 func BenchmarkPlainOTel_AlwaysExport(b *testing.B) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(noopSpanProcessor{}))
 	defer func() { _ = tp.Shutdown(context.Background()) }()
