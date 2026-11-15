@@ -95,8 +95,6 @@ func NewTokenBucket(rate, burst int, now func() time.Time) *TokenBucket {
 	return &TokenBucket{rate: float64(rate), burst: float64(burst), tokens: float64(burst), last: now(), now: now}
 }
 
-// wait blocks until a token is available or ctx is done, and reports whether
-// it got a token.
 // Wait blocks until a token is available or ctx is done, and reports
 // whether it got one.
 func (b *TokenBucket) Wait(ctx context.Context) bool {

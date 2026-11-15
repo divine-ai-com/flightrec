@@ -54,21 +54,38 @@ func TestRecentSet(t *testing.T) {
 	if _, ok := r.Get("a"); ok {
 		t.Error("oldest key kept past the limit")
 	}
+	for _, k := range []string{"b", "c"} {
+		if _, ok := r.Get(k); !ok {
+			t.Errorf("%s evicted although newer than a", k)
+		}
+	}
 	now = now.Add(2 * time.Minute)
 	if _, ok := r.Get("c"); ok {
 		t.Error("key kept past its TTL")
+	}
+	r.Add("d", "4") // expired keys make room without evicting live ones
+	if v, ok := r.Get("d"); !ok || v != "4" {
+		t.Errorf("Get(d) = %q, %v", v, ok)
 	}
 }
 
 func TestTokenBucket(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	b := NewTokenBucket(10, 2, func() time.Time { return now })
-	if !b.Take() || !b.Take() || b.Take() {
-		t.Fatal("burst of 2 not enforced")
+	for i := range 2 {
+		if !b.Take() {
+			t.Fatalf("token %d of the burst refused", i+1)
+		}
+	}
+	if b.Take() {
+		t.Fatal("burst of 2 exceeded")
 	}
 	now = now.Add(100 * time.Millisecond) // one token at 10 per second
-	if !b.Take() || b.Take() {
-		t.Error("refill rate not enforced")
+	if !b.Take() {
+		t.Error("refilled token refused")
+	}
+	if b.Take() {
+		t.Error("refill rate exceeded")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

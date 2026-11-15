@@ -17,9 +17,9 @@ import (
 // FRS1.<base64url payload>.<unix seconds>.<hex HMAC-SHA256 of everything before it>
 const signedPrefix = "FRS1."
 
-// MaxSkew bounds how old (or how far in the future) a signed message
+// maxSkew bounds how old (or how far in the future) a signed message
 // may be, which limits replay of captured messages.
-const MaxSkew = 2 * time.Minute
+const maxSkew = 2 * time.Minute
 
 // MinKeyLen is the shortest key WithSigningKey accepts.
 const MinKeyLen = 32
@@ -74,7 +74,7 @@ func Open(keys [][]byte, msg []byte, now time.Time) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	if d := now.Sub(time.Unix(ts, 0)); d > MaxSkew || d < -MaxSkew {
+	if d := now.Sub(time.Unix(ts, 0)); d > maxSkew || d < -maxSkew {
 		return nil, false
 	}
 	payload, err := base64.RawURLEncoding.AppendDecode(nil, signed[len(signedPrefix):tsAt])
