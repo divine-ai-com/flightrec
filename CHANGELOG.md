@@ -5,7 +5,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
 ## [Unreleased]
 
 ### Security
-- With `Retain` or `StartJournal`, `slog.Any` values were copied as JSON only, so `slog.TextHandler` and other handlers that print values with `String` or `MarshalText` showed the raw value: a type that redacts itself in `String` (a password type printing `***`) leaked once either feature was on. Copies now keep the text rendering the original value produces, and the JSON rendering for JSON handlers.
+- With `Retain` or `StartJournal`, `slog.Any` values were copied as JSON only, so `slog.TextHandler` and other handlers that print values with `String` or `MarshalText` showed the raw value: a type that redacts itself in `String` (a password type printing `***`) leaked once either feature was on. Copies now keep both renderings, made as slog's handlers make them (a nil pointer prints `<nil>` instead of panicking). Journals written by this version store both; an earlier version cannot recover records with `slog.Any` values from them, so recover before rolling back.
 - Copied `slog.Any` values are capped at 64 KB each, and copying for `Retain` stops once a scope's copies exceed `MaxRetained`, so large values cannot make retention allocate far beyond its limits.
 
 ### Changed

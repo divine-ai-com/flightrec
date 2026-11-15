@@ -212,7 +212,7 @@ func TestJournalCodecRoundTrip(t *testing.T) {
 		!got["far"].Time().Equal(far) || !got["zero"].Time().IsZero() {
 		t.Errorf("attributes %v", jr.attrs)
 	}
-	if v := got["err"]; v.Kind() != slog.KindString || v.String() != "boom" {
+	if v := got["err"]; v.String() != "boom" {
 		t.Errorf("error attribute %v (%v)", v, v.Kind())
 	}
 	if b, _ := json.Marshal(got["m"].Any()); string(b) != `{"k":1}` || got["m"].String() != "map[k:1]" {

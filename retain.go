@@ -436,30 +436,8 @@ const snapshotTruncated = "!TRUNCATED: value larger than 64 KB"
 // fmt's %+v, which honours String). Keeping the text rendering preserves
 // redaction that a type does in String or MarshalText.
 func snapshotAny(v any) slog.Value {
-	if _, isMarshaler := v.(json.Marshaler); !isMarshaler {
-		if err, ok := v.(error); ok {
-			return slog.StringValue(err.Error())
-		}
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	var raw []byte
-	if err := enc.Encode(v); err != nil {
-		raw, _ = json.Marshal("!ERROR:" + err.Error())
-	} else {
-		raw = bytes.TrimRight(buf.Bytes(), "\n")
-	}
-	var text string
-	if tm, ok := v.(encoding.TextMarshaler); ok {
-		if b, err := tm.MarshalText(); err == nil {
-			text = string(b)
-		} else {
-			text = "!ERROR:" + err.Error()
-		}
-	} else {
-		text = fmt.Sprintf("%+v", v)
-	}
+	raw := snapshotJSON(v)
+	text := snapshotText(v)
 	if len(raw) > maxSnapshotValue {
 		raw, _ = json.Marshal(snapshotTruncated)
 	}
@@ -467,6 +445,61 @@ func snapshotAny(v any) slog.Value {
 		text = snapshotTruncated
 	}
 	return slog.AnyValue(snapshotValue{raw: raw, text: text})
+}
+
+// snapshotJSON renders v as slog.JSONHandler does: an error that is not a
+// json.Marshaler as its message, anything else through encoding/json.
+func snapshotJSON(v any) (raw []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			raw, _ = json.Marshal(panicText(v, r))
+		}
+	}()
+	if _, isMarshaler := v.(json.Marshaler); !isMarshaler {
+		if err, ok := v.(error); ok {
+			raw, _ = json.Marshal(err.Error())
+			return raw
+		}
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		raw, _ = json.Marshal("!ERROR:" + err.Error())
+		return raw
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n")
+}
+
+// snapshotText renders v as slog.TextHandler does: MarshalText if v has it,
+// a byte slice as its string (TextHandler quotes it when needed), anything
+// else with fmt's %+v (which uses Format, Error or String).
+func snapshotText(v any) (text string) {
+	defer func() {
+		if r := recover(); r != nil {
+			text = panicText(v, r)
+		}
+	}()
+	if tm, ok := v.(encoding.TextMarshaler); ok {
+		b, err := tm.MarshalText()
+		if err != nil {
+			return "!ERROR:" + err.Error()
+		}
+		return string(b)
+	}
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
+		return string(rv.Bytes())
+	}
+	return fmt.Sprintf("%+v", v)
+}
+
+// panicText is what slog writes when rendering a value panics: <nil> for a
+// nil pointer (a value-receiver method called through it), else the panic.
+func panicText(v any, r any) string {
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return "<nil>"
+	}
+	return fmt.Sprintf("!PANIC: %v", r)
 }
 
 // snapshotValue is a copy of a slog.Any value taken when its scope was

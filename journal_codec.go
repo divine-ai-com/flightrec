@@ -5,6 +5,7 @@ package flightrec
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"math"
@@ -113,6 +114,10 @@ func decodeJournalRecord(b []byte) (journalRecord, error) {
 	return jr, d.err
 }
 
+// maxJournalValue bounds the two renderings of a slog.Any value in a journal
+// record together, so a record with one large value still fits an entry.
+const maxJournalValue = 32 << 10
+
 // Attribute value tags. They match neither slog.Kind values nor any order.
 const (
 	tagString byte = iota + 1
@@ -195,6 +200,15 @@ func appendJAttr(b []byte, a slog.Attr, depth int) []byte {
 		// cannot encode come back as strings; the rest is JSON text.
 		sv := snapshotAny(v.Any())
 		if s, ok := sv.Any().(snapshotValue); ok {
+			// Both renderings must fit one journal entry: drop the text
+			// first (text handlers then print the JSON), then the JSON.
+			if len(s.raw)+len(s.text) > maxJournalValue {
+				s.text = string(s.raw)
+				if 2*len(s.raw) > maxJournalValue {
+					s.raw, _ = json.Marshal(snapshotTruncated)
+					s.text = snapshotTruncated
+				}
+			}
 			b = append(b, tagSnapshot)
 			b = appendJString(b, string(s.raw))
 			b = appendJString(b, s.text)

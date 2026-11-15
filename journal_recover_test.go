@@ -611,3 +611,68 @@ func TestSnapshotBudget(t *testing.T) {
 		t.Errorf("copy past the budget: %v", got.Value)
 	}
 }
+
+// redactedErr redacts itself in MarshalText, which slog.TextHandler prefers.
+type redactedErr struct{}
+
+func (redactedErr) Error() string                { return "secret-err" }
+func (redactedErr) MarshalText() ([]byte, error) { return []byte("redacted-err"), nil }
+
+// TestSnapshotRendersLikeSlog compares the copy's renderings with what
+// slog.TextHandler and slog.JSONHandler write for the original value.
+func TestSnapshotRendersLikeSlog(t *testing.T) {
+	var nilTime *time.Time
+	for name, v := range map[string]any{
+		"nil pointer with value MarshalText": nilTime,
+		"error redacting in MarshalText":     redactedErr{},
+		"plain error":                        errors.New("boom"),
+		"map":                                map[string]int{"k": 1},
+		"nil":                                nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			render := func(h func(*bytes.Buffer) slog.Handler, val any) string {
+				var buf bytes.Buffer
+				r := slog.NewRecord(time.Time{}, slog.LevelInfo, "m", 0)
+				r.AddAttrs(slog.Any("k", val))
+				if err := h(&buf).Handle(context.Background(), r); err != nil {
+					t.Fatal(err)
+				}
+				return buf.String()
+			}
+			text := func(b *bytes.Buffer) slog.Handler { return slog.NewTextHandler(b, nil) }
+			js := func(b *bytes.Buffer) slog.Handler { return slog.NewJSONHandler(b, nil) }
+			snap := snapshotAny(v).Any()
+			if got, want := render(text, snap), render(text, v); got != want {
+				t.Errorf("text: got %q, want %q", got, want)
+			}
+			if got, want := render(js, snap), render(js, v); got != want {
+				t.Errorf("json: got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestSnapshotByteSlice(t *testing.T) {
+	// slog.TextHandler always quotes a byte slice; the copy's text is the
+	// same string, which TextHandler quotes when it needs to.
+	if s := snapshotAny([]byte("a b")).Any().(snapshotValue); s.text != "a b" {
+		t.Errorf("text %q", s.text)
+	}
+}
+
+// TestJournalFitsMidSizeValues checks that a record with one value of a few
+// tens of KB is journaled, not dropped for having two renderings.
+func TestJournalFitsMidSizeValues(t *testing.T) {
+	type blob struct{ Data string }
+	path := filepath.Join(t.TempDir(), "j")
+	r := New(Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug, MaxPerScope: 1 << 20})
+	if _, err := r.StartJournal(path, WithJournalSize(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, _ := StartScope(context.Background(), r, ScopeMeta{TraceID: "t"})
+	slog.New(r).DebugContext(ctx, "mid", "b", blob{Data: strings.Repeat("x", 40<<10)})
+	if st := r.Stats(); st.JournalDropped != 0 || st.JournalRecordsWritten != 1 {
+		t.Errorf("stats %+v", st)
+	}
+	crash(t, r)
+}
