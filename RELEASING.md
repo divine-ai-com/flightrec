@@ -7,6 +7,7 @@ This repository holds three Go modules, each versioned and tagged on its own:
 | Core | `github.com/divine-ai-com/flightrec` | `vX.Y.Z` |
 | gRPC | `github.com/divine-ai-com/flightrec/grpcflightrec` | `grpcflightrec/vX.Y.Z` |
 | OpenTelemetry | `github.com/divine-ai-com/flightrec/otelflightrec` | `otelflightrec/vX.Y.Z` |
+| Redis notifier | `github.com/divine-ai-com/flightrec/notifier/redisnotifier` | `notifier/redisnotifier/vX.Y.Z` |
 
 Tags are protected: once pushed, a tag is never moved or deleted. A broken release is fixed with a new patch version and a `retract` directive.
 
