@@ -5,7 +5,7 @@ Get `flightrec` running in an existing Go service in under 10 minutes.
 ## 1. Install
 
 ```bash
-go get github.com/divine-ai-com/flightrec@v0.1.1
+go get github.com/divine-ai-com/flightrec@latest
 ```
 
 ## 2. Wrap Your `slog.Handler` (3 Changes)
@@ -55,7 +55,7 @@ func handleOrder(w http.ResponseWriter, r *http.Request) {
 
 ## 4. Background Jobs (Manual Scopes)
 
-Logs outside any HTTP/gRPC request are filtered by `PassLeveler` and written directly to `Next`. To buffer logs for a background job or worker iteration, open a scope manually:
+Logs outside any HTTP/gRPC request go to `Next` unchanged, filtered by `Next.Enabled` as without flightrec. To buffer logs for a background job or worker iteration, open a scope manually:
 
 ```go
 func processJob(parentCtx context.Context, rec *flightrec.Recorder, jobID string) (err error) {
@@ -82,7 +82,7 @@ func processJob(parentCtx context.Context, rec *flightrec.Recorder, jobID string
 Install the OpenTelemetry submodule:
 
 ```bash
-go get github.com/divine-ai-com/flightrec/otelflightrec@v0.2.0
+go get github.com/divine-ai-com/flightrec/otelflightrec@latest
 ```
 
 Attach `otelflightrec.SpanProcessor` to your OpenTelemetry `TracerProvider` and link it to `rec`:
