@@ -7,6 +7,7 @@ package flightrec
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -105,7 +106,7 @@ func TestStartJournalWritesScopeEntries(t *testing.T) {
 	for _, a := range r0.attrs {
 		got[a.Key] = a.Value
 	}
-	if got["amount"].Int64() != 4598 || !got["ok"].Bool() || !got["at"].Time().Equal(when) || got["tags"].String() != `["a"]` {
+	if got["amount"].Int64() != 4598 || !got["ok"].Bool() || !got["at"].Time().Equal(when) || got["tags"].String() != "[a]" {
 		t.Errorf("record attributes %v", r0.attrs)
 	}
 
@@ -211,10 +212,10 @@ func TestJournalCodecRoundTrip(t *testing.T) {
 		!got["far"].Time().Equal(far) || !got["zero"].Time().IsZero() {
 		t.Errorf("attributes %v", jr.attrs)
 	}
-	if v := got["err"]; v.Kind() != slog.KindString || v.String() != "boom" {
+	if v := got["err"]; v.String() != "boom" {
 		t.Errorf("error attribute %v (%v)", v, v.Kind())
 	}
-	if got["m"].String() != `{"k":1}` {
+	if b, _ := json.Marshal(got["m"].Any()); string(b) != `{"k":1}` || got["m"].String() != "map[k:1]" {
 		t.Errorf("any attribute %v", got["m"])
 	}
 	if got["deep"].Kind() != slog.KindGroup {

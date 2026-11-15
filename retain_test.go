@@ -268,17 +268,29 @@ func TestRetainedSnapshotWithTextHandler(t *testing.T) {
 	})
 	log := slog.New(rec)
 	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t"})
-	log.DebugContext(ctx, "loaded", "order", &order{ID: 3, State: "new"}, "bad", make(chan int))
+	log.DebugContext(ctx, "loaded", "order", &order{ID: 3, State: "new"}, "creds", creds{User: "bob", Pass: "hunter2"})
 	sc.End(ctx, 200)
 	rec.FlushTrace(context.Background(), "t", "x")
 
+	// The copy renders as slog.TextHandler renders the original value, so a
+	// type that redacts itself in String stays redacted.
 	text := out.String()
-	if !strings.Contains(text, `order="{\"id\":3,\"state\":\"new\"}"`) {
-		t.Errorf("TextHandler output does not show the order as JSON text: %s", text)
+	if !strings.Contains(text, `order="&{ID:3 State:new}"`) {
+		t.Errorf("TextHandler output does not show the order as the original value would: %s", text)
 	}
-	if !strings.Contains(text, "bad=") || !strings.Contains(text, "!ERROR:") {
-		t.Errorf("value JSON cannot encode should become an error string: %s", text)
+	if strings.Contains(text, "hunter2") || !strings.Contains(text, `creds="{User:bob Pass:***}"`) {
+		t.Errorf("String-based redaction lost after retention: %s", text)
 	}
+}
+
+// secret redacts itself when printed.
+type secret string
+
+func (secret) String() string { return "***" }
+
+type creds struct {
+	User string
+	Pass secret
 }
 
 func TestRetainedRecordWithManyAttrs(t *testing.T) {

@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"encoding"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"sync"
@@ -41,7 +43,7 @@ type retainedSet struct {
 
 // retain moves the entries of a healthy scope into the retained set.
 func (st *recorderState) retain(traceID, alias string, entries []bufferedEntry, truncated bool, dropped uint64, now time.Time) {
-	snapshotBytes := snapshotAnyValues(entries)
+	snapshotBytes := snapshotAnyValues(entries, st.opts.MaxRetained)
 	rs := &retainedScope{
 		traceID:    traceID,
 		alias:      alias,
@@ -290,8 +292,8 @@ func (st *recorderState) writeFlushed(ctx context.Context, entries []bufferedEnt
 // slog.JSONHandler and as text by slog.TextHandler. Errors become their
 // message, and values JSON cannot encode become a string describing the
 // error. It returns the bytes the copies add.
-func snapshotAnyValues(entries []bufferedEntry) int64 {
-	sn := snapshotter{}
+func snapshotAnyValues(entries []bufferedEntry, budget int64) int64 {
+	sn := snapshotter{budget: budget}
 	copied := make(map[*Recorder]*Recorder)
 	for i := range entries {
 		e := &entries[i]
@@ -328,6 +330,7 @@ func snapshotAnyValues(entries []bufferedEntry) int64 {
 // snapshotter copies values for one retained scope. The same pointer is
 // often logged many times in one request, so pointer values are encoded once.
 type snapshotter struct {
+	budget   int64 // stop copying once added exceeds it; 0 means no limit
 	added    int64
 	pointers map[any]slog.Value
 }
@@ -392,8 +395,17 @@ func (sn *snapshotter) attr(a slog.Attr) slog.Attr {
 				return a
 			}
 		}
+		if sn.budget > 0 && sn.added > sn.budget {
+			// Copying more could not be retained anyway: stop paying for it.
+			a.Value = slog.StringValue("!TRUNCATED: retained budget exceeded")
+			return a
+		}
 		a.Value = snapshotAny(v)
-		sn.added += int64(len(a.Value.String()))
+		if s, ok := a.Value.Any().(snapshotValue); ok {
+			sn.added += s.size()
+		} else {
+			sn.added += int64(len(a.Value.String()))
+		}
 		if isPointer {
 			if sn.pointers == nil {
 				sn.pointers = make(map[any]slog.Value)
@@ -411,31 +423,101 @@ func (sn *snapshotter) attr(a slog.Attr) slog.Attr {
 	return a
 }
 
+// maxSnapshotValue bounds one copied slog.Any value, in each of its two
+// renderings. Larger values are replaced by a short marker.
+const maxSnapshotValue = 64 << 10
+
+// snapshotTruncated replaces a value too large to copy.
+const snapshotTruncated = "!TRUNCATED: value larger than 64 KB"
+
+// snapshotAny copies v as the two renderings handlers use: JSON, as
+// slog.JSONHandler writes values (json.Marshal, honouring MarshalJSON), and
+// text, as slog.TextHandler writes them (MarshalText if v has it, otherwise
+// fmt's %+v, which honours String). Keeping the text rendering preserves
+// redaction that a type does in String or MarshalText.
 func snapshotAny(v any) slog.Value {
+	raw := snapshotJSON(v)
+	text := snapshotText(v)
+	if len(raw) > maxSnapshotValue {
+		raw, _ = json.Marshal(snapshotTruncated)
+	}
+	if len(text) > maxSnapshotValue {
+		text = snapshotTruncated
+	}
+	return slog.AnyValue(snapshotValue{raw: raw, text: text})
+}
+
+// snapshotJSON renders v as slog.JSONHandler does: an error that is not a
+// json.Marshaler as its message, anything else through encoding/json.
+func snapshotJSON(v any) (raw []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			raw, _ = json.Marshal(panicText(v, r))
+		}
+	}()
 	if _, isMarshaler := v.(json.Marshaler); !isMarshaler {
 		if err, ok := v.(error); ok {
-			return slog.StringValue(err.Error())
+			raw, _ = json.Marshal(err.Error())
+			return raw
 		}
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		return slog.StringValue("!ERROR:" + err.Error())
+		raw, _ = json.Marshal("!ERROR:" + err.Error())
+		return raw
 	}
-	return slog.AnyValue(snapshotValue{raw: bytes.TrimRight(buf.Bytes(), "\n")})
+	return bytes.TrimRight(buf.Bytes(), "\n")
+}
+
+// snapshotText renders v as slog.TextHandler does: MarshalText if v has it,
+// a byte slice as its string (TextHandler quotes it when needed), anything
+// else with fmt's %+v (which uses Format, Error or String).
+func snapshotText(v any) (text string) {
+	defer func() {
+		if r := recover(); r != nil {
+			text = panicText(v, r)
+		}
+	}()
+	if tm, ok := v.(encoding.TextMarshaler); ok {
+		b, err := tm.MarshalText()
+		if err != nil {
+			return "!ERROR:" + err.Error()
+		}
+		return string(b)
+	}
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
+		return string(rv.Bytes())
+	}
+	return fmt.Sprintf("%+v", v)
+}
+
+// panicText is what slog writes when rendering a value panics: <nil> for a
+// nil pointer (a value-receiver method called through it), else the panic.
+func panicText(v any, r any) string {
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return "<nil>"
+	}
+	return fmt.Sprintf("!PANIC: %v", r)
 }
 
 // snapshotValue is a copy of a slog.Any value taken when its scope was
-// retained, held as JSON. slog.JSONHandler writes it as the original JSON;
-// slog.TextHandler and fmt write the JSON text.
-type snapshotValue struct{ raw []byte }
+// retained or journaled. slog.JSONHandler writes it as the original JSON;
+// slog.TextHandler and fmt write the text the original value produced.
+type snapshotValue struct {
+	raw  []byte
+	text string
+}
 
 // MarshalJSON implements json.Marshaler.
 func (v snapshotValue) MarshalJSON() ([]byte, error) { return v.raw, nil }
 
 // MarshalText implements encoding.TextMarshaler.
-func (v snapshotValue) MarshalText() ([]byte, error) { return v.raw, nil }
+func (v snapshotValue) MarshalText() ([]byte, error) { return []byte(v.text), nil }
 
 // String implements fmt.Stringer.
-func (v snapshotValue) String() string { return string(v.raw) }
+func (v snapshotValue) String() string { return v.text }
+
+// size is the memory the copy holds.
+func (v snapshotValue) size() int64 { return int64(len(v.raw) + len(v.text)) }
