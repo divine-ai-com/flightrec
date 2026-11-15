@@ -64,7 +64,12 @@ type collector struct {
 	msgs []string
 }
 
-func (c *collector) deliver(m []byte) { c.mu.Lock(); c.msgs = append(c.msgs, string(m)); c.mu.Unlock() }
+func (c *collector) deliver(m []byte) {
+	c.mu.Lock()
+	c.msgs = append(c.msgs, string(m))
+	c.mu.Unlock()
+}
+
 func (c *collector) got() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
