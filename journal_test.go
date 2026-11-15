@@ -169,7 +169,7 @@ func TestJournalCodecRoundTrip(t *testing.T) {
 	rec := New(Options{Next: slog.DiscardHandler})
 	r := rec.WithAttrs([]slog.Attr{slog.Float64("rootf", 0.25)}).WithGroup("g").WithAttrs([]slog.Attr{slog.String("ga", "v")}).(*Recorder)
 	far := time.Date(3000, 1, 2, 3, 4, 5, 6, time.UTC)
-	var deep slog.Attr = slog.String("leaf", "x")
+	deep := slog.String("leaf", "x")
 	for range maxGroupDepth + 5 {
 		deep = slog.Group("deep", deep)
 	}
