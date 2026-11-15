@@ -272,13 +272,26 @@ func Discard(path string) error {
 	return os.Remove(path)
 }
 
+// private reports whether fi is a regular file owned by the current user with
+// a single link.
+func private(fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && fi.Mode().IsRegular() && int(st.Uid) == os.Getuid() && st.Nlink == 1
+}
+
 // AcquireLock creates the lock file at path if needed (mode 0600, never
 // through a symlink) and takes an exclusive lock on it. unlock releases it;
 // the file stays.
 func AcquireLock(path string) (unlock func(), err error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600) //nolint:gosec // G304: the path is derived from the journal path the application configured
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0o600) //nolint:gosec // G304: the path is derived from the journal path the application configured
 	if err != nil {
 		return nil, err
+	}
+	// A lock file another user created (to block this one, or to watch it)
+	// is refused rather than used.
+	if fi, err := f.Stat(); err != nil || !private(fi) {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %s", ErrNotPrivate, path)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()

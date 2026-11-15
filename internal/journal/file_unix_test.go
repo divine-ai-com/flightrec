@@ -146,3 +146,28 @@ func TestErrNotPrivateIsDistinct(t *testing.T) {
 		t.Fatal("errors must differ")
 	}
 }
+
+// TestAcquireLockRefusesForeignFiles checks that a lock file that is not a
+// private regular file with one link (planted by another user, say) is
+// refused rather than used.
+func TestAcquireLockRefusesForeignFiles(t *testing.T) {
+	dir := t.TempDir()
+	other := filepath.Join(dir, "other")
+	if err := os.WriteFile(other, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(dir, "j.lock")
+	if err := os.Link(other, lock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireLock(lock); !errors.Is(err, ErrNotPrivate) {
+		t.Errorf("hard-linked lock file: %v, want ErrNotPrivate", err)
+	}
+	fifo := filepath.Join(dir, "f.lock")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireLock(fifo); !errors.Is(err, ErrNotPrivate) {
+		t.Errorf("FIFO lock file: %v, want ErrNotPrivate", err)
+	}
+}
