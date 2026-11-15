@@ -6,7 +6,6 @@ package flightrec_test
 import (
 	"context"
 	"errors"
-	"github.com/divine-ai-com/flightrec"
 	"io"
 	"log"
 	"log/slog"
@@ -16,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/divine-ai-com/flightrec"
 )
 
 func TestScopeSendFlushMarker(t *testing.T) {
