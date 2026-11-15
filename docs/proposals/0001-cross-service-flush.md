@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | Draft, open for review |
+| Status | Accepted with the defaults below (#33) |
 | Milestone | v0.3.0 |
 | Scope | core module, `grpcflightrec`, two new notifier modules |
 

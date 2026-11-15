@@ -88,6 +88,11 @@ type Options struct {
 	// (64 MB) when <= 0.
 	MaxTotal int64
 
+	// DisableFlushMarker stops HTTPMiddleware from setting the FlushHeader
+	// response header. Set it on services whose responses go to clients
+	// outside your system, such as a public API or an edge gateway.
+	DisableFlushMarker bool
+
 	// DisableHealthySummary disables writing the single summary log line when
 	// a healthy (untriggered) scope completes.
 	DisableHealthySummary bool
@@ -121,6 +126,13 @@ type Stats struct {
 	RecordsHealthyDropped     uint64
 	RecordsDroppedPerScopeCap uint64
 	RecordsDroppedTotalCap    uint64
+
+	// FlushMarkersSent counts responses that carried the Flightrec-Flush
+	// header because their scope was triggered before headers were written.
+	FlushMarkersSent uint64
+	// FlushMarkersMissed counts triggered scopes whose response headers were
+	// already written, so the Flightrec-Flush header could not be added.
+	FlushMarkersMissed uint64
 }
 
 type groupFrame struct {
@@ -161,6 +173,8 @@ type recorderState struct {
 	recordsHealthyDropped     atomic.Uint64
 	recordsDroppedPerScopeCap atomic.Uint64
 	recordsDroppedTotalCap    atomic.Uint64
+	flushMarkersSent          atomic.Uint64
+	flushMarkersMissed        atomic.Uint64
 
 	listMu sync.Mutex
 	oldest *Scope
@@ -269,6 +283,8 @@ func (r *Recorder) Stats() Stats {
 		RecordsHealthyDropped:     st.recordsHealthyDropped.Load(),
 		RecordsDroppedPerScopeCap: st.recordsDroppedPerScopeCap.Load(),
 		RecordsDroppedTotalCap:    st.recordsDroppedTotalCap.Load(),
+		FlushMarkersSent:          st.flushMarkersSent.Load(),
+		FlushMarkersMissed:        st.flushMarkersMissed.Load(),
 	}
 }
 
@@ -505,6 +521,19 @@ func (s *Scope) Trigger(reason string) {
 
 	if notify && s.state != nil {
 		s.state.notifyScopeTrigger(s, tid, reason)
+	}
+}
+
+// triggerIfSlow triggers the scope with reason slow_request if it has run for
+// at least Options.SlowAfter. It lets the HTTP middleware decide before the
+// response headers are sent, instead of only at End.
+func (s *Scope) triggerIfSlow() {
+	st := s.state
+	if st == nil || st.opts.SlowAfter <= 0 {
+		return
+	}
+	if st.now().Sub(s.startTime) >= st.opts.SlowAfter {
+		s.Trigger("slow_request")
 	}
 }
 
