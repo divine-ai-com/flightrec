@@ -83,6 +83,13 @@ type SpanProcessorOptions struct {
 
 	// DisableExceptionTrigger disables automatic triggering when a span records
 	// an "exception" event. By default, exception events trigger a trace flush.
+	//
+	// Error status and exception events on a client or producer span do not
+	// trigger when the span records the other service's answer as a client
+	// error (rpc.grpc.status_code outside the server-fault codes, or
+	// http.response.status_code below 500): that service decided the request
+	// was not a failure. Other outbound errors, such as connection failures,
+	// timeouts and database errors, trigger as before.
 	DisableExceptionTrigger bool
 
 	// Now returns the current time. Defaults to time.Now.
@@ -1050,10 +1057,16 @@ func (sp *SpanProcessor) Shutdown(ctx context.Context) error {
 }
 
 func (sp *SpanProcessor) checkSpanTrigger(s sdktrace.ReadOnlySpan) string {
-	if s.Status().Code == codes.Error {
+	// Instrumentation marks a client span as an error when the other service
+	// answered with a client error such as NotFound or a 404. That service
+	// decided the request was not a failure, so this one does not trigger.
+	// Errors with no such answer (connection refused, a timeout, a database
+	// or a third-party call) still trigger.
+	clientAnswer := remoteClientAnswer(s)
+	if s.Status().Code == codes.Error && !clientAnswer {
 		return "span_error"
 	}
-	if !sp.opts.DisableExceptionTrigger {
+	if !sp.opts.DisableExceptionTrigger && !clientAnswer {
 		for _, ev := range s.Events() {
 			if ev.Name == "exception" {
 				return "span_exception"
@@ -1064,6 +1077,33 @@ func (sp *SpanProcessor) checkSpanTrigger(s sdktrace.ReadOnlySpan) string {
 		return "slow_trace"
 	}
 	return ""
+}
+
+// remoteClientAnswer reports whether s is a client or producer span that
+// records an answer from the remote side that is not a server fault: a gRPC
+// status other than Unknown, DeadlineExceeded, Unimplemented, Internal,
+// Unavailable and DataLoss (the codes flightrec's gRPC interceptors flush
+// on), or an HTTP response status below 500.
+func remoteClientAnswer(s sdktrace.ReadOnlySpan) bool {
+	if k := s.SpanKind(); k != trace.SpanKindClient && k != trace.SpanKindProducer {
+		return false
+	}
+	for _, kv := range s.Attributes() {
+		if kv.Value.Type() != attribute.INT64 {
+			continue
+		}
+		switch kv.Key {
+		case "rpc.grpc.status_code":
+			switch kv.Value.AsInt64() {
+			case 2, 4, 12, 13, 14, 15: // Unknown, DeadlineExceeded, Unimplemented, Internal, Unavailable, DataLoss
+				return false
+			}
+			return true
+		case "http.response.status_code", "http.status_code":
+			return kv.Value.AsInt64() < 500
+		}
+	}
+	return false
 }
 
 type enrichedSpan struct {

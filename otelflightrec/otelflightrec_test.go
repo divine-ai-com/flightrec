@@ -279,6 +279,59 @@ func TestExceptionAndSlowTraceTriggers(t *testing.T) {
 	})
 }
 
+// TestOutboundSpanErrors checks which errors on outbound spans trigger: a
+// remote that answered with a client error does not, while a server fault, a
+// failure with no answer, and errors on other span kinds do.
+func TestOutboundSpanErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		kind    trace.SpanKind
+		attrs   []attribute.KeyValue
+		status  bool // set codes.Error
+		event   bool // record an exception event
+		trigger bool
+	}{
+		{"grpc NotFound", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 5)}, true, true, false},
+		{"grpc NotFound status only", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 5)}, true, false, false},
+		{"grpc NotFound event only", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 5)}, false, true, false},
+		{"http 404", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("http.response.status_code", 404)}, true, false, false},
+		{"grpc Unavailable", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 14)}, true, false, true},
+		{"http 503", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("http.response.status_code", 503)}, true, false, true},
+		{"no answer (connection refused, database)", trace.SpanKindClient, nil, true, true, true},
+		{"producer publish failed", trace.SpanKindProducer, nil, true, false, true},
+		{"internal error", trace.SpanKindInternal, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 5)}, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			sp := otelflightrec.NewSpanProcessor(otelflightrec.SpanProcessorOptions{
+				Next: sdktrace.NewSimpleSpanProcessor(exporter),
+			})
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
+			defer func() { _ = tp.Shutdown(context.Background()) }()
+			tracer := tp.Tracer("test")
+
+			ctx, root := tracer.Start(context.Background(), "root", trace.WithSpanKind(trace.SpanKindServer))
+			_, call := tracer.Start(ctx, "call", trace.WithSpanKind(tc.kind), trace.WithAttributes(tc.attrs...))
+			if tc.event {
+				call.RecordError(errors.New("call failed"))
+			}
+			if tc.status {
+				call.SetStatus(codes.Error, "call failed")
+			}
+			call.End()
+			root.End()
+
+			want := 1 // healthy: the root only
+			if tc.trigger {
+				want = 2
+			}
+			if got := len(exporter.GetSpans()); got != want {
+				t.Fatalf("%d spans exported, want %d", got, want)
+			}
+		})
+	}
+}
+
 func TestBothHTTPMiddlewareOrdersCoordinateLogsAndTraces(t *testing.T) {
 	for _, order := range []string{"otel_outer", "flightrec_outer"} {
 		t.Run(order, func(t *testing.T) {
