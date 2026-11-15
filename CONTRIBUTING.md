@@ -45,7 +45,7 @@ For benchmark comparisons, run each side with `-count=10` and compare with [benc
 
 - Branch from `main` with a name like `fix/short-description` or `feat/short-description`.
 - Keep one logical change per PR, closing one issue.
-- Title the PR as a [Conventional Commit](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`, lower case, imperative, no period. Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`. Scopes: `core`, `http`, `grpc`, `otel`. The title becomes the commit message on `main`.
+- Title the PR as a [Conventional Commit](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`, lower case, imperative, no period. Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`. Scopes: `core`, `http`, `grpc`, `otel`, `notifier`. The title becomes the commit message on `main`.
 - Fill in the PR template: what and why, the issue it closes, and how it was tested.
 - Add an entry under `## [Unreleased]` in `CHANGELOG.md`, unless the change is invisible to users.
 - A bug fix includes a test that fails without the fix.

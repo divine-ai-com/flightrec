@@ -9,6 +9,7 @@ Only the latest minor release of each module receives security fixes.
 | `github.com/divine-ai-com/flightrec` | `v0.2.x` |
 | `github.com/divine-ai-com/flightrec/grpcflightrec` | `v0.2.x` |
 | `github.com/divine-ai-com/flightrec/otelflightrec` | `v0.2.x` |
+| `github.com/divine-ai-com/flightrec/notifier/redisnotifier` | `v0.3.x` once released |
 
 ## Reporting a Vulnerability
 
