@@ -1,26 +1,20 @@
 # Troubleshooting
 
-## 1. Buffered `DEBUG` logs are not appearing even when a request fails
+## 1. Buffered `DEBUG` logs are not appearing when expected
 
-**Cause:** Your underlying `slog.Handler` (`Options.Next`) is configured with its default minimum level (`slog.LevelInfo`), so it drops `slog.LevelDebug` records when `flightrec` flushes them.
+**Causes & Fixes:**
+- **Missing request context:** Ensure log calls inside handlers pass the request context (`slog.DebugContext(r.Context(), "msg")`). Calling `slog.Debug("msg")` without `ctx` has no request scope and is delegated directly to `Options.Next` (see the package [Level Filtering](https://pkg.go.dev/github.com/divine-ai-com/flightrec#hdr-Level_Filtering) docs).
+- **`BufferLeveler` set above `slog.LevelDebug`:** If `Options.BufferLeveler` is set to `slog.LevelInfo`, `DEBUG` records are ignored. Leave `BufferLeveler` unset or set it to `slog.LevelDebug`. When a scope triggers, `flightrec` flushes buffered records directly through `Options.Next.Handle` regardless of `Options.Next`'s own level, so `Options.Next` does not need `Level: slog.LevelDebug` for flushed records to appear.
+- **Request did not trigger:** Verify that the request logged an `ERROR`, returned HTTP `>= 500` (or a gRPC server-fault code), exceeded `Options.SlowAfter`, or called `flightrec.Flush(ctx, "reason")`.
 
-**Fix:** Configure `Options.Next` with `Level: slog.LevelDebug`:
+## 2. Logs outside a request (`slog.Debug` / `slog.Info` at startup) are filtered
 
-```go
-inner := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-    Level: slog.LevelDebug,
-})
-rec := flightrec.New(flightrec.Options{Next: inner})
-```
+**Cause:** Outside an active request scope, `flightrec` delegates `Enabled` and `Handle` directly to `Options.Next`.
 
-## 2. `DEBUG` logs are being written immediately for every healthy request
-
-**Cause:** The log call did not pass the request's `context.Context` (for example calling `slog.Debug("msg")` instead of `slog.DebugContext(r.Context(), "msg")`). Logs without an active scope in `ctx` pass straight through to `Next`.
-
-**Fix:** Always use `slog.DebugContext(ctx, ...)` and `slog.InfoContext(ctx, ...)` inside request handlers.
+**Fix:** Configure `Options.Next` with the minimum level you want for non-request logs (defaults to `slog.LevelInfo` on standard library handlers).
 
 ## 3. Flushed logs show `flightrec.truncated: true`
 
-**Cause:** The single request produced more than `Options.MaxPerScope` bytes (default 256 KB) of buffered records, or process-wide buffered memory reached `Options.MaxTotal` (default 64 MB).
+**Cause:** The single request produced more than `Options.MaxPerScope` bytes (default 256 KB, including ring-buffer slot capacity) of buffered records, or process-wide buffered memory reached `Options.MaxTotal` (default 64 MB).
 
 **Fix:** Check `rec.Stats()` (`RecordsDroppedPerScopeCap` vs `ScopesEvictedTotalCap`) and either reduce overly large log attributes in hot loops or raise `MaxPerScope` / `MaxTotal`.

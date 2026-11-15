@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: ['1.24.x', '1.25.x']
+        go-version: ['1.26.x', '1.27.x']
     steps:
       - uses: actions/checkout@v4
 
@@ -22,11 +22,20 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
-      - name: Vet
+      - name: Check Formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet (root module)
         run: go vet ./...
 
-      - name: Test with Race Detector
+      - name: Test with Race Detector (root module)
         run: go test -race -v ./...
+
+      - name: Vet & Test with Race Detector (grpcflightrec)
+        working-directory: grpcflightrec
+        run: |
+          go vet ./...
+          go test -race -v ./...
 
       - name: Run Volume & Fidelity Demo
         run: go run ./cmd/demo

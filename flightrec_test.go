@@ -4,13 +4,17 @@
 package flightrec_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -56,9 +60,9 @@ func (b *syncBuffer) Lines(t *testing.T) []map[string]any {
 func TestHealthyRequestDropsBufferAndWritesSummary(t *testing.T) {
 	out := &syncBuffer{}
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLevel:   slog.LevelWarn,
-		BufferLevel: slog.LevelDebug,
+		Next:          slog.NewJSONHandler(out, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
 	})
 	logger := slog.New(rec)
 
@@ -170,10 +174,10 @@ func TestTriggersFlushBufferedRecordsInOrder(t *testing.T) {
 			var nowMu sync.Mutex
 
 			rec := flightrec.New(flightrec.Options{
-				Next:        slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-				PassLevel:   slog.LevelWarn,
-				BufferLevel: slog.LevelDebug,
-				SlowAfter:   tc.slowAfter,
+				Next:          slog.NewJSONHandler(out, nil),
+				PassLeveler:   slog.LevelWarn,
+				BufferLeveler: slog.LevelDebug,
+				SlowAfter:     tc.slowAfter,
 				Now: func() time.Time {
 					nowMu.Lock()
 					defer nowMu.Unlock()
@@ -232,11 +236,11 @@ func TestMemoryCapsAndEvictionMetrics(t *testing.T) {
 	t.Run("MaxPerScope drops oldest records and marks truncated", func(t *testing.T) {
 		out := &syncBuffer{}
 		rec := flightrec.New(flightrec.Options{
-			Next:        slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-			PassLevel:   slog.LevelWarn,
-			BufferLevel: slog.LevelDebug,
-			MaxPerScope: 450, // room for roughly 2 small records (~180 bytes each)
-			MaxTotal:    64 << 10,
+			Next:          slog.NewJSONHandler(out, nil),
+			PassLeveler:   slog.LevelWarn,
+			BufferLeveler: slog.LevelDebug,
+			MaxPerScope:   450,
+			MaxTotal:      64 << 10,
 		})
 		logger := slog.New(rec)
 
@@ -252,7 +256,6 @@ func TestMemoryCapsAndEvictionMetrics(t *testing.T) {
 		if len(lines) == 0 || len(lines) >= 4 {
 			t.Fatalf("expected partial truncated flush (1..3 lines), got %d: %+v", len(lines), lines)
 		}
-		// Last message must be msg-4 (newest kept, oldest dropped).
 		last := lines[len(lines)-1]
 		if last["msg"] != "msg-4" {
 			t.Errorf("expected newest record msg-4 to survive, got %v", last["msg"])
@@ -273,11 +276,11 @@ func TestMemoryCapsAndEvictionMetrics(t *testing.T) {
 	t.Run("MaxTotal evicts oldest scope when process limit is reached", func(t *testing.T) {
 		out := &syncBuffer{}
 		rec := flightrec.New(flightrec.Options{
-			Next:        slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-			PassLevel:   slog.LevelWarn,
-			BufferLevel: slog.LevelDebug,
-			MaxPerScope: 350,
-			MaxTotal:    350, // Only enough room for one scope's records
+			Next:          slog.NewJSONHandler(out, nil),
+			PassLeveler:   slog.LevelWarn,
+			BufferLeveler: slog.LevelDebug,
+			MaxPerScope:   350,
+			MaxTotal:      350,
 		})
 		logger := slog.New(rec)
 
@@ -307,9 +310,9 @@ func TestMemoryCapsAndEvictionMetrics(t *testing.T) {
 func TestWithAttrsAndWithGroupPreservedOnFlush(t *testing.T) {
 	out := &syncBuffer{}
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLevel:   slog.LevelWarn,
-		BufferLevel: slog.LevelDebug,
+		Next:          slog.NewJSONHandler(out, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
 	})
 	child := slog.New(rec).With("service", "billing").WithGroup("stripe")
 
@@ -338,7 +341,7 @@ func TestWithAttrsAndWithGroupPreservedOnFlush(t *testing.T) {
 func TestGRPCUnaryHelper(t *testing.T) {
 	out := &syncBuffer{}
 	rec := flightrec.New(flightrec.Options{
-		Next: slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		Next: slog.NewJSONHandler(out, nil),
 	})
 	logger := slog.New(rec)
 
@@ -363,42 +366,611 @@ func TestGRPCUnaryHelper(t *testing.T) {
 	}
 }
 
-func TestSlogtestCompliancePassThrough(t *testing.T) {
+func TestNestedGroupsMatchSlog(t *testing.T) {
 	var buf bytes.Buffer
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLevel:   slog.LevelDebug,
-		BufferLevel: slog.LevelDebug,
+		Next:                  slog.NewJSONHandler(&buf, nil),
+		PassLeveler:           slog.LevelWarn,
+		BufferLeveler:         slog.LevelDebug,
+		DisableHealthySummary: true,
+	})
+	l := slog.New(rec).With("a", "b").WithGroup("G").With("c", "d").WithGroup("H")
+
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t1"})
+	l.WarnContext(ctx, "immediate warn", "e", "f")
+	l.DebugContext(ctx, "buffered debug", "e", "f")
+	flightrec.Flush(ctx, "force")
+	sc.End(ctx, 200)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines (1 warn + 1 flushed debug), got %d: %s", len(lines), buf.String())
+	}
+	for idx, raw := range lines {
+		if strings.Count(raw, `"G":{`) != 1 {
+			t.Errorf("line %d has duplicate G key in raw JSON: %s", idx, raw)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatalf("line %d invalid JSON: %v", idx, err)
+		}
+		g, _ := m["G"].(map[string]any)
+		if g == nil || g["c"] != "d" {
+			t.Errorf("line %d lost G.c='d': parsed G=%+v (raw=%s)", idx, g, raw)
+		}
+		h, _ := g["H"].(map[string]any)
+		if h == nil || h["e"] != "f" {
+			t.Errorf("line %d lost G.H.e='f': parsed G=%+v (raw=%s)", idx, g, raw)
+		}
+	}
+}
+
+type scopedTestHandler struct {
+	rec   *flightrec.Recorder
+	sub   slog.Handler
+	flush bool
+}
+
+func (s *scopedTestHandler) target() slog.Handler {
+	if s.sub != nil {
+		return s.sub
+	}
+	return s.rec
+}
+
+func (s *scopedTestHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	ctx, sc := flightrec.StartScope(ctx, s.rec, flightrec.ScopeMeta{TraceID: "slogtest"})
+	defer sc.End(ctx, 200)
+	return s.target().Enabled(ctx, level)
+}
+
+func (s *scopedTestHandler) Handle(ctx context.Context, r slog.Record) error {
+	ctx, sc := flightrec.StartScope(ctx, s.rec, flightrec.ScopeMeta{TraceID: "slogtest"})
+	err := s.target().Handle(ctx, r)
+	if s.flush {
+		flightrec.Flush(ctx, "slogtest_flush")
+	}
+	sc.End(ctx, 200)
+	return err
+}
+
+func (s *scopedTestHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &scopedTestHandler{
+		rec:   s.rec,
+		sub:   s.target().WithAttrs(attrs),
+		flush: s.flush,
+	}
+}
+
+func (s *scopedTestHandler) WithGroup(name string) slog.Handler {
+	return &scopedTestHandler{
+		rec:   s.rec,
+		sub:   s.target().WithGroup(name),
+		flush: s.flush,
+	}
+}
+
+func parseJSONLines(t *testing.T, data []byte) []map[string]any {
+	t.Helper()
+	var ms []map[string]any
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal(line, &m); err != nil {
+			t.Fatalf("unmarshal %q: %v", line, err)
+		}
+		ms = append(ms, m)
+	}
+	return ms
+}
+
+func TestSlogtestCompliancePassThrough(t *testing.T) {
+	t.Run("out-of-scope pass-through", func(t *testing.T) {
+		var buf bytes.Buffer
+		rec := flightrec.New(flightrec.Options{
+			Next:          slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
+			PassLeveler:   slog.LevelDebug,
+			BufferLeveler: slog.LevelDebug,
+		})
+		results := func() []map[string]any {
+			return parseJSONLines(t, buf.Bytes())
+		}
+		if err := slogtest.TestHandler(rec, results); err != nil {
+			t.Fatal(err)
+		}
 	})
 
-	results := func() []map[string]any {
-		var ms []map[string]any
-		for _, line := range bytes.Split(buf.Bytes(), []byte{'\n'}) {
-			if len(line) == 0 {
-				continue
-			}
-			var m map[string]any
-			if err := json.Unmarshal(line, &m); err != nil {
-				t.Fatal(err)
-			}
-			ms = append(ms, m)
+	t.Run("in-scope immediate pass-through", func(t *testing.T) {
+		var buf bytes.Buffer
+		rec := flightrec.New(flightrec.Options{
+			Next:                  slog.NewJSONHandler(&buf, nil),
+			PassLeveler:           slog.LevelDebug,
+			BufferLeveler:         slog.LevelDebug,
+			DisableHealthySummary: true,
+		})
+		h := &scopedTestHandler{rec: rec, flush: false}
+		results := func() []map[string]any {
+			return parseJSONLines(t, buf.Bytes())
 		}
-		return ms
-	}
+		if err := slogtest.TestHandler(h, results); err != nil {
+			t.Fatal(err)
+		}
+	})
 
-	if err := slogtest.TestHandler(rec, results); err != nil {
-		t.Fatal(err)
+	t.Run("in-scope buffered and flushed", func(t *testing.T) {
+		var buf bytes.Buffer
+		rec := flightrec.New(flightrec.Options{
+			Next:                  slog.NewJSONHandler(&buf, nil),
+			PassLeveler:           slog.LevelError + 4,
+			BufferLeveler:         slog.LevelDebug,
+			DisableHealthySummary: true,
+		})
+		h := &scopedTestHandler{rec: rec, flush: true}
+		results := func() []map[string]any {
+			return parseJSONLines(t, buf.Bytes())
+		}
+		if err := slogtest.TestHandler(h, results); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestMaxTotalLongLivedScopes(t *testing.T) {
+	const maxPerScope = 4 << 10 // 4 KB
+	const maxTotal = 16 << 10   // 16 KB
+	rec := flightrec.New(flightrec.Options{
+		Next:          slog.NewJSONHandler(io.Discard, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+		MaxPerScope:   maxPerScope,
+		MaxTotal:      maxTotal,
+	})
+	logger := slog.New(rec)
+
+	const numScopes = 50
+	ctxs := make([]context.Context, numScopes)
+	scopes := make([]*flightrec.Scope, numScopes)
+	for i := 0; i < numScopes; i++ {
+		ctxs[i], scopes[i] = flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{})
+	}
+	defer func() {
+		for i := range scopes {
+			scopes[i].End(ctxs[i], 200)
+		}
+	}()
+
+	for round := 0; round < 40; round++ {
+		for i := 0; i < numScopes; i++ {
+			logger.DebugContext(ctxs[i], "streaming chunk", "round", round, "scope", i, "payload", "0123456789abcdef0123456789abcdef")
+			st := rec.Stats()
+			if st.BufferedBytes > maxTotal {
+				t.Fatalf("round %d scope %d: MaxTotal violated: BufferedBytes=%d > MaxTotal=%d",
+					round, i, st.BufferedBytes, maxTotal)
+			}
+		}
+	}
+}
+
+func TestIdleScopeMemoryAndSlotAccounting(t *testing.T) {
+	t.Run("idle scopes allocate lazily", func(t *testing.T) {
+		rec := flightrec.New(flightrec.Options{
+			Next:          slog.NewJSONHandler(io.Discard, nil),
+			PassLeveler:   slog.LevelWarn,
+			BufferLeveler: slog.LevelDebug,
+			MaxPerScope:   256 << 10,
+			MaxTotal:      64 << 20,
+		})
+
+		runtime.GC()
+		var mBefore runtime.MemStats
+		runtime.ReadMemStats(&mBefore)
+
+		const idleScopes = 2000
+		ctxs := make([]context.Context, idleScopes)
+		scopes := make([]*flightrec.Scope, idleScopes)
+		for i := 0; i < idleScopes; i++ {
+			ctxs[i], scopes[i] = flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "idle"})
+		}
+
+		runtime.GC()
+		var mAfter runtime.MemStats
+		runtime.ReadMemStats(&mAfter)
+
+		var heapDelta int64
+		if mAfter.HeapAlloc > mBefore.HeapAlloc {
+			heapDelta = int64(mAfter.HeapAlloc - mBefore.HeapAlloc)
+		}
+		runtime.KeepAlive(ctxs)
+		runtime.KeepAlive(scopes)
+
+		for i := range scopes {
+			scopes[i].End(ctxs[i], 200)
+		}
+
+		bytesPerIdleScope := heapDelta / idleScopes
+		if bytesPerIdleScope > 1024 {
+			t.Fatalf("idle StartScope allocated ~%d B/scope (total %d KB for %d idle scopes); ring buffer is not lazily allocated",
+				bytesPerIdleScope, heapDelta>>10, idleScopes)
+		}
+	})
+
+	t.Run("active scopes account for ring slot capacity", func(t *testing.T) {
+		rec := flightrec.New(flightrec.Options{
+			Next:          slog.NewJSONHandler(io.Discard, nil),
+			PassLeveler:   slog.LevelWarn,
+			BufferLeveler: slog.LevelDebug,
+			MaxPerScope:   256 << 10,
+			MaxTotal:      64 << 20,
+		})
+		logger := slog.New(rec)
+
+		runtime.GC()
+		var mBefore runtime.MemStats
+		runtime.ReadMemStats(&mBefore)
+
+		const activeScopes = 200
+		ctxs := make([]context.Context, activeScopes)
+		scopes := make([]*flightrec.Scope, activeScopes)
+		for i := 0; i < activeScopes; i++ {
+			ctxs[i], scopes[i] = flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "active"})
+			for j := 0; j < 20; j++ {
+				logger.DebugContext(ctxs[i], "db query executed", "table", "orders", "rows", j, "cached", true)
+			}
+		}
+
+		runtime.GC()
+		var mAfter runtime.MemStats
+		runtime.ReadMemStats(&mAfter)
+
+		accounted := rec.Stats().BufferedBytes
+		var realDelta int64
+		if mAfter.HeapAlloc > mBefore.HeapAlloc {
+			realDelta = int64(mAfter.HeapAlloc - mBefore.HeapAlloc)
+		}
+		runtime.KeepAlive(ctxs)
+		runtime.KeepAlive(scopes)
+
+		for i := range scopes {
+			scopes[i].End(ctxs[i], 200)
+		}
+
+		if accounted == 0 || realDelta > accounted*3/2 {
+			t.Fatalf("real heap delta (%d B) exceeds 1.5x accounted BufferedBytes (%d B)", realDelta, accounted)
+		}
+	})
+}
+
+func TestLogAfterScopeEndPassedThrough(t *testing.T) {
+	out := &syncBuffer{}
+	rec := flightrec.New(flightrec.Options{
+		Next:                  slog.NewJSONHandler(out, nil),
+		PassLeveler:           slog.LevelWarn,
+		BufferLeveler:         slog.LevelDebug,
+		DisableHealthySummary: true,
+	})
+	logger := slog.New(rec)
+
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "closed-scope"})
+	sc.End(ctx, 200)
+
+	beforeStats := rec.Stats()
+	logger.InfoContext(ctx, "late goroutine info")
+	logger.DebugContext(ctx, "late goroutine debug")
+	afterStats := rec.Stats()
+
+	lines := out.Lines(t)
+	passedThroughDelta := afterStats.RecordsPassedThrough - beforeStats.RecordsPassedThrough
+	if len(lines) != 2 || passedThroughDelta != 2 {
+		t.Fatalf("records logged after Scope.End were not passed through and counted: lines=%d, delta=%d",
+			len(lines), passedThroughDelta)
+	}
+	if lines[0]["flightrec.trace_id"] != "closed-scope" {
+		t.Fatalf("expected flightrec.trace_id='closed-scope' on post-End log, got %+v", lines[0])
+	}
+}
+
+func TestLevelFilteringInAndOutOfScope(t *testing.T) {
+	t.Run("out-of-scope Info log reaches Next at default Info level", func(t *testing.T) {
+		out := &syncBuffer{}
+		rec := flightrec.New(flightrec.Options{
+			Next:          slog.NewJSONHandler(out, nil), // default LevelInfo
+			PassLeveler:   slog.LevelWarn,
+			BufferLeveler: slog.LevelDebug,
+		})
+		l := slog.New(rec)
+
+		l.Info("server listening", "addr", ":8080")
+		l.InfoContext(context.Background(), "nightly job finished", "rows", 1200)
+		l.Debug("out-of-scope debug filtered by Next")
+
+		lines := out.Lines(t)
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 out-of-scope Info lines, got %d: %+v", len(lines), lines)
+		}
+		if lines[0]["msg"] != "server listening" || lines[1]["msg"] != "nightly job finished" {
+			t.Fatalf("unexpected out-of-scope lines: %+v", lines)
+		}
+	})
+
+	t.Run("in-scope flushed Debug records are written even when Next is at Info", func(t *testing.T) {
+		out := &syncBuffer{}
+		rec := flightrec.New(flightrec.Options{
+			Next:                  slog.NewJSONHandler(out, nil), // default LevelInfo
+			PassLeveler:           slog.LevelWarn,
+			BufferLeveler:         slog.LevelDebug,
+			DisableHealthySummary: true,
+		})
+		l := slog.New(rec)
+
+		ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "s1"})
+		l.DebugContext(ctx, "step detail")
+		sc.End(ctx, 500)
+
+		lines := out.Lines(t)
+		if len(lines) != 1 || lines[0]["msg"] != "step detail" {
+			t.Fatalf("expected flushed Debug record when Next is at Info, got %+v", lines)
+		}
+	})
+}
+
+func TestLevelerOptionsAndDefaults(t *testing.T) {
+	t.Run("setting only BufferLevel defaults PassLevel to Warn", func(t *testing.T) {
+		out := &syncBuffer{}
+		rec := flightrec.New(flightrec.Options{
+			Next:                  slog.NewJSONHandler(out, nil),
+			BufferLevel:           slog.LevelDebug,
+			DisableHealthySummary: true,
+		})
+		logger := slog.New(rec)
+		ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t6a"})
+		logger.InfoContext(ctx, "info should be buffered, not passed through immediately")
+		if len(out.Lines(t)) != 0 {
+			t.Fatalf("expected Info to be buffered when PassLevel is unset (default Warn), but it was written immediately: %+v", out.Lines(t))
+		}
+		sc.End(ctx, 200)
+	})
+
+	t.Run("BufferLeveler set to LevelInfo drops Debug and buffers Info", func(t *testing.T) {
+		out := &syncBuffer{}
+		rec := flightrec.New(flightrec.Options{
+			Next:                  slog.NewJSONHandler(out, nil),
+			PassLeveler:           slog.LevelWarn,
+			BufferLeveler:         slog.LevelInfo,
+			DisableHealthySummary: true,
+		})
+		logger := slog.New(rec)
+		ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t6b"})
+		logger.DebugContext(ctx, "debug should be ignored below BufferLeveler=Info")
+		logger.InfoContext(ctx, "info should be buffered")
+		flightrec.Flush(ctx, "force")
+		sc.End(ctx, 200)
+
+		lines := out.Lines(t)
+		if len(lines) != 1 || lines[0]["msg"] != "info should be buffered" {
+			t.Fatalf("expected only Info record to be buffered and flushed, got %+v", lines)
+		}
+	})
+}
+
+type mutableOrder struct {
+	State string
+}
+
+func (o *mutableOrder) LogValue() slog.Value {
+	return slog.StringValue(o.State)
+}
+
+func TestLogValuerResolvedAtBufferTime(t *testing.T) {
+	out := &syncBuffer{}
+	rec := flightrec.New(flightrec.Options{
+		Next:                  slog.NewJSONHandler(out, nil),
+		PassLeveler:           slog.LevelWarn,
+		BufferLeveler:         slog.LevelDebug,
+		DisableHealthySummary: true,
+	})
+
+	ordAttr := &mutableOrder{State: "created"}
+	logger := slog.New(rec).With("with_order", ordAttr)
+	ordAttr.State = "mutated_after_with"
+
+	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t7"})
+	ord := &mutableOrder{State: "pending"}
+	grpOrd := &mutableOrder{State: "queued"}
+	logger.DebugContext(ctx, "order created", "order", ord, slog.Group("nested", "grp_order", grpOrd))
+	ord.State = "paid"
+	grpOrd.State = "shipped"
+	flightrec.Flush(ctx, "force")
+	sc.End(ctx, 200)
+
+	lines := out.Lines(t)
+	if len(lines) != 1 || lines[0]["order"] != "pending" || lines[0]["with_order"] != "created" {
+		t.Fatalf("expected order='pending' and with_order='created' captured at log time, got %+v", lines)
+	}
+	nested, _ := lines[0]["nested"].(map[string]any)
+	if nested == nil || nested["grp_order"] != "queued" {
+		t.Fatalf("expected nested.grp_order='queued' captured at log time, got %+v", lines[0])
+	}
+}
+
+type fakeGRPCStatus struct{ code uint32 }
+
+func (s *fakeGRPCStatus) Code() uint32 { return s.code }
+
+type fakeGRPCError struct{ code uint32 }
+
+func (e *fakeGRPCError) Error() string               { return "grpc error" }
+func (e *fakeGRPCError) GRPCStatus() *fakeGRPCStatus { return &fakeGRPCStatus{code: e.code} }
+
+func TestGRPCErrorClassificationAndStream(t *testing.T) {
+	t.Run("NotFound client error does not flush and logs grpc.code=5", func(t *testing.T) {
+		out := &syncBuffer{}
+		rec := flightrec.New(flightrec.Options{
+			Next:          slog.NewJSONHandler(out, nil),
+			PassLeveler:   slog.LevelWarn,
+			BufferLeveler: slog.LevelDebug,
+		})
+		logger := slog.New(rec)
+
+		inCtx := flightrec.WithIncomingMetadata(context.Background(), map[string][]string{
+			"x-trace-id": {"grpc-meta-trace-42"},
+		})
+
+		_, err := flightrec.InvokeGRPCUnary(
+			inCtx,
+			rec,
+			"/orders.Service/GetOrder",
+			nil,
+			nil,
+			func(ctx context.Context, _ any) (any, error) {
+				logger.DebugContext(ctx, "lookup order in cache")
+				return nil, &fakeGRPCError{code: 5} // codes.NotFound = 5
+			},
+		)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		lines := out.Lines(t)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 healthy summary line, got %+v", lines)
+		}
+		if lines[0]["msg"] != "request completed" || lines[0]["grpc.code"] != float64(5) || lines[0]["flightrec.trace_id"] != "grpc-meta-trace-42" {
+			t.Fatalf("unexpected gRPC summary line: %+v", lines[0])
+		}
+		if _, hasHTTPStatus := lines[0]["status"]; hasHTTPStatus {
+			t.Fatalf("gRPC summary should not emit HTTP status attribute: %+v", lines[0])
+		}
+	})
+
+	t.Run("streaming server fault flushes buffer", func(t *testing.T) {
+		out := &syncBuffer{}
+		rec := flightrec.New(flightrec.Options{
+			Next:          slog.NewJSONHandler(out, nil),
+			PassLeveler:   slog.LevelWarn,
+			BufferLeveler: slog.LevelDebug,
+		})
+		logger := slog.New(rec)
+
+		err := flightrec.InvokeGRPCStream(
+			flightrec.WithIncomingMetadata(context.Background(), map[string][]string{"x-request-id": {"stream-99"}}),
+			rec,
+			"/orders.Service/WatchOrders",
+			nil,
+			func(ctx context.Context) error {
+				logger.DebugContext(ctx, "stream frame 1")
+				return &fakeGRPCError{code: 13} // codes.Internal = 13
+			},
+		)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		lines := out.Lines(t)
+		if len(lines) != 1 || lines[0]["msg"] != "stream frame 1" || lines[0]["flightrec.trace_id"] != "stream-99" {
+			t.Fatalf("expected flushed stream log, got %+v", lines)
+		}
+	})
+}
+
+type readerFromRecorder struct {
+	*httptest.ResponseRecorder
+	readFromCalled bool
+}
+
+func (r *readerFromRecorder) ReadFrom(src io.Reader) (int64, error) {
+	r.readFromCalled = true
+	return io.Copy(r.ResponseRecorder, src)
+}
+
+type hijackRecorder struct {
+	*httptest.ResponseRecorder
+}
+
+func (h *hijackRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, nil
+}
+
+func TestResponseWriterInterfacePreservation(t *testing.T) {
+	rec := flightrec.New(flightrec.Options{
+		Next: slog.NewJSONHandler(io.Discard, nil),
+	})
+
+	t.Run("ResponseRecorder does not claim Hijacker or Pusher", func(t *testing.T) {
+		var claimedHijacker, claimedPusher bool
+		mw := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, claimedHijacker = w.(http.Hijacker)
+			_, claimedPusher = w.(http.Pusher)
+			w.WriteHeader(http.StatusOK)
+		}))
+		mw.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/test", nil))
+		if claimedHijacker || claimedPusher {
+			t.Fatalf("ResponseWriter falsely claimed Hijacker=%v Pusher=%v", claimedHijacker, claimedPusher)
+		}
+	})
+
+	t.Run("preserves io.ReaderFrom and http.Hijacker when present", func(t *testing.T) {
+		rfRec := &readerFromRecorder{ResponseRecorder: httptest.NewRecorder()}
+		mw := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rf, ok := w.(io.ReaderFrom)
+			if !ok {
+				t.Fatal("expected io.ReaderFrom to be preserved")
+			}
+			_, _ = rf.ReadFrom(strings.NewReader("hello sendfile"))
+		}))
+		mw.ServeHTTP(rfRec, httptest.NewRequest(http.MethodGet, "/file", nil))
+		if !rfRec.readFromCalled || rfRec.Body.String() != "hello sendfile" {
+			t.Fatalf("io.ReaderFrom was not delegated properly: called=%v body=%q", rfRec.readFromCalled, rfRec.Body.String())
+		}
+
+		hjRec := &hijackRecorder{ResponseRecorder: httptest.NewRecorder()}
+		var hasHijacker bool
+		mwHj := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, hasHijacker = w.(http.Hijacker)
+		}))
+		mwHj.ServeHTTP(hjRec, httptest.NewRequest(http.MethodGet, "/ws", nil))
+		if !hasHijacker {
+			t.Fatal("expected http.Hijacker to be preserved when underlying ResponseWriter implements it")
+		}
+	})
+}
+
+func TestErrAbortHandlerNotPanicFlush(t *testing.T) {
+	out := &syncBuffer{}
+	rec := flightrec.New(flightrec.Options{
+		Next:                  slog.NewJSONHandler(out, nil),
+		PassLeveler:           slog.LevelWarn,
+		BufferLeveler:         slog.LevelDebug,
+		DisableHealthySummary: true,
+	})
+	logger := slog.New(rec)
+
+	mw := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger.DebugContext(r.Context(), "streaming chunk before abort")
+		panic(http.ErrAbortHandler)
+	}))
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		mw.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/stream", nil))
+	}()
+
+	if recovered != http.ErrAbortHandler {
+		t.Fatalf("expected http.ErrAbortHandler to be re-panicked, got %v", recovered)
+	}
+	if len(out.Lines(t)) != 0 {
+		t.Fatalf("http.ErrAbortHandler triggered a panic flush: %+v", out.Lines(t))
 	}
 }
 
 func TestConcurrentStressWithRaceDetector(t *testing.T) {
 	out := &syncBuffer{}
 	rec := flightrec.New(flightrec.Options{
-		Next:        slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLevel:   slog.LevelWarn,
-		BufferLevel: slog.LevelDebug,
-		MaxPerScope: 4 << 10,
-		MaxTotal:    64 << 10,
+		Next:          slog.NewJSONHandler(out, nil),
+		PassLeveler:   slog.LevelWarn,
+		BufferLeveler: slog.LevelDebug,
+		MaxPerScope:   4 << 10,
+		MaxTotal:      64 << 10,
 	})
 	logger := slog.New(rec)
 
