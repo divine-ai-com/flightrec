@@ -133,6 +133,12 @@ type Stats struct {
 	// FlushMarkersMissed counts triggered scopes whose response headers were
 	// already written, so the Flightrec-Flush header could not be added.
 	FlushMarkersMissed uint64
+	// DownstreamTriggers counts scopes triggered by a FlushHeader on a
+	// response read through NewTransport.
+	DownstreamTriggers uint64
+	// MarkersRejected counts FlushHeader values from responses that were not
+	// a built-in reason and were ignored.
+	MarkersRejected uint64
 }
 
 type groupFrame struct {
@@ -175,6 +181,8 @@ type recorderState struct {
 	recordsDroppedTotalCap    atomic.Uint64
 	flushMarkersSent          atomic.Uint64
 	flushMarkersMissed        atomic.Uint64
+	downstreamTriggers        atomic.Uint64
+	markersRejected           atomic.Uint64
 
 	listMu sync.Mutex
 	oldest *Scope
@@ -285,6 +293,8 @@ func (r *Recorder) Stats() Stats {
 		RecordsDroppedTotalCap:    st.recordsDroppedTotalCap.Load(),
 		FlushMarkersSent:          st.flushMarkersSent.Load(),
 		FlushMarkersMissed:        st.flushMarkersMissed.Load(),
+		DownstreamTriggers:        st.downstreamTriggers.Load(),
+		MarkersRejected:           st.markersRejected.Load(),
 	}
 }
 

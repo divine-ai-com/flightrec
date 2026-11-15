@@ -34,10 +34,16 @@ var markerReasons = map[string]bool{
 	"explicit_flush": true,
 }
 
-// markerReason maps a scope's flush reason to the value sent in FlushHeader.
-// Prefixes added by cross-service flushes (downstream:, remote:) are removed,
-// so the value names the original failure and does not grow at each hop.
-func markerReason(reason string) string {
+// MarkerValue maps a flush reason to the value carried in FlushHeader or the
+// gRPC flush trailer. Prefixes added by cross-service flushes (downstream:,
+// remote:) are removed, so the value names the original failure and does not
+// grow at each hop. ok reports whether the reason is a built-in one; any
+// other reason maps to explicit_flush.
+//
+// Integrations use it in both directions: to choose the value to send, and to
+// validate a value received from another service, rejecting it when ok is
+// false.
+func MarkerValue(reason string) (value string, ok bool) {
 	for {
 		switch {
 		case strings.HasPrefix(reason, "downstream:"):
@@ -46,9 +52,9 @@ func markerReason(reason string) string {
 			reason = reason[len("remote:"):]
 		default:
 			if markerReasons[reason] {
-				return reason
+				return reason, true
 			}
-			return "explicit_flush"
+			return "explicit_flush", false
 		}
 	}
 }
@@ -168,7 +174,8 @@ func (w *statusResponseWriter) beforeHeaders(code int) {
 		return
 	}
 	if triggered, reason := w.scope.TriggerState(); triggered {
-		w.Header().Set(FlushHeader, markerReason(reason))
+		value, _ := MarkerValue(reason)
+		w.Header().Set(FlushHeader, value)
 		w.markerSent = true
 		w.scope.state.flushMarkersSent.Add(1)
 	}
