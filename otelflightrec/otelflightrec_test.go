@@ -279,21 +279,29 @@ func TestExceptionAndSlowTraceTriggers(t *testing.T) {
 	})
 }
 
-// TestOutboundSpanErrorsDoNotTrigger checks that an error on a client or
-// producer span (a call to another service that answered NotFound, say)
-// leaves a healthy trace healthy, while the same error on an internal span
-// still triggers.
-func TestOutboundSpanErrorsDoNotTrigger(t *testing.T) {
+// TestOutboundSpanErrors checks which errors on outbound spans trigger: a
+// remote that answered with a client error does not, while a server fault, a
+// failure with no answer, and errors on other span kinds do.
+func TestOutboundSpanErrors(t *testing.T) {
 	for _, tc := range []struct {
+		name    string
 		kind    trace.SpanKind
+		attrs   []attribute.KeyValue
+		status  bool // set codes.Error
+		event   bool // record an exception event
 		trigger bool
 	}{
-		{trace.SpanKindClient, false},
-		{trace.SpanKindProducer, false},
-		{trace.SpanKindInternal, true},
-		{trace.SpanKindConsumer, true},
+		{"grpc NotFound", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 5)}, true, true, false},
+		{"grpc NotFound status only", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 5)}, true, false, false},
+		{"grpc NotFound event only", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 5)}, false, true, false},
+		{"http 404", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("http.response.status_code", 404)}, true, false, false},
+		{"grpc Unavailable", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 14)}, true, false, true},
+		{"http 503", trace.SpanKindClient, []attribute.KeyValue{attribute.Int("http.response.status_code", 503)}, true, false, true},
+		{"no answer (connection refused, database)", trace.SpanKindClient, nil, true, true, true},
+		{"producer publish failed", trace.SpanKindProducer, nil, true, false, true},
+		{"internal error", trace.SpanKindInternal, []attribute.KeyValue{attribute.Int("rpc.grpc.status_code", 5)}, true, false, true},
 	} {
-		t.Run(tc.kind.String(), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			exporter := tracetest.NewInMemoryExporter()
 			sp := otelflightrec.NewSpanProcessor(otelflightrec.SpanProcessorOptions{
 				Next: sdktrace.NewSimpleSpanProcessor(exporter),
@@ -303,9 +311,13 @@ func TestOutboundSpanErrorsDoNotTrigger(t *testing.T) {
 			tracer := tp.Tracer("test")
 
 			ctx, root := tracer.Start(context.Background(), "root", trace.WithSpanKind(trace.SpanKindServer))
-			_, call := tracer.Start(ctx, "inventory.Get", trace.WithSpanKind(tc.kind))
-			call.RecordError(errors.New("rpc error: code = NotFound"))
-			call.SetStatus(codes.Error, "NotFound")
+			_, call := tracer.Start(ctx, "call", trace.WithSpanKind(tc.kind), trace.WithAttributes(tc.attrs...))
+			if tc.event {
+				call.RecordError(errors.New("call failed"))
+			}
+			if tc.status {
+				call.SetStatus(codes.Error, "call failed")
+			}
 			call.End()
 			root.End()
 
@@ -314,7 +326,7 @@ func TestOutboundSpanErrorsDoNotTrigger(t *testing.T) {
 				want = 2
 			}
 			if got := len(exporter.GetSpans()); got != want {
-				t.Fatalf("%v span error: %d spans exported, want %d", tc.kind, got, want)
+				t.Fatalf("%d spans exported, want %d", got, want)
 			}
 		})
 	}

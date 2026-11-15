@@ -337,7 +337,7 @@ slog.Info("flightrec",
 | A gRPC server fault (`Unknown`, `DeadlineExceeded`, `Unimplemented`, `Internal`, `Unavailable`, `DataLoss`) or non-gRPC error (client codes like `NotFound`, `InvalidArgument`, `Canceled` do not flush; `DeadlineExceeded` does flush) | `grpc_error` |
 | The handler panicked, except `http.ErrAbortHandler` (the panic is re-raised after the flush) | `panic` |
 | The request took `SlowAfter` or longer | `slow_request` |
-| A server, internal or consumer span in the trace ended with `codes.Error` or recorded an `"exception"` event, or any span exceeded `SlowAfter` (`otelflightrec`). Errors on client and producer spans, which describe calls to other services, do not trigger | `span_error`, `span_exception`, `slow_trace` |
+| A span in the trace ended with `codes.Error` or recorded an `"exception"` event, or exceeded `SlowAfter` (`otelflightrec`). A client span whose remote answered with a client error (a gRPC code such as `NotFound`, or an HTTP status below 500) does not trigger: that service decided the request was not a failure | `span_error`, `span_exception`, `slow_trace` |
 | The code called `flightrec.Flush(ctx, reason)` or `otelflightrec.FlushTrace(ctx, sp, reason)` | the reason given |
 | A service this request called kept its logs (`NewTransport`, gRPC client interceptors) | `downstream:<reason>` |
 | Another service, or another scope in this process, kept its logs for the same trace (`StartNotifier`, `Retain`) | `remote:<reason>` |
