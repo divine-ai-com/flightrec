@@ -1,0 +1,60 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - nolintlint
+    - misspell
+    - errorlint
+    - gosec
+  settings:
+    govet:
+      enable:
+        - nilness
+        - reflectvaluecompare
+        - sortslice
+        - unusedwrite
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: var-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: unused-parameter
+          disabled: true
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    gosec:
+      excludes:
+        # unsafe.Sizeof is used for memory accounting only.
+        - G103
+  exclusions:
+    generated: lax
+    rules:
+      # Example and test code may ignore errors from writes to buffers and Shutdown.
+      - path: _test\.go$
+        linters: [errcheck, gosec]
+      # The demo is not library code.
+      - path: cmd/demo/
+        linters: [gosec]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/divine-ai-com/flightrec

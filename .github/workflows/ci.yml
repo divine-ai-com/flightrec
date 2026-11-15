@@ -14,67 +14,109 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: Test (Go ${{ matrix.go-version }})
+  lint:
+    name: lint (${{ matrix.module }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        go-version: ['1.26.x', '1.27.x']
+        module: [., grpcflightrec, otelflightrec]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: 1.27.x
+          cache-dependency-path: '**/go.sum'
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: ${{ matrix.module }}
 
-      - name: Check Formatting
-        run: test -z "$(gofmt -l .)"
-
-      - name: Vet (root module)
-        run: go vet ./...
-
-      - name: Test with Race Detector (root module)
-        run: go test -race -v ./...
-
-      - name: Vet & Test with Race Detector (grpcflightrec)
-        working-directory: grpcflightrec
+  test:
+    name: test (go ${{ matrix.go }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [1.26.x, 1.27.x]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: '**/go.sum'
+      - name: Test every module
+        shell: bash
         run: |
-          go vet ./...
-          go test -race -v ./...
+          race=-race
+          # The race detector needs cgo; Windows runs the same tests without it.
+          if [ "$RUNNER_OS" = "Windows" ]; then race=; fi
+          for m in . grpcflightrec otelflightrec; do
+            echo "::group::$m"
+            (cd "$m" && go test $race -shuffle=on ./...) || exit 1
+            echo "::endgroup::"
+          done
 
-      - name: Vet & Test with Race Detector (otelflightrec)
-        working-directory: otelflightrec
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.x
+      - name: Core coverage with minimum
+        run: make cover
+      - name: Coverage summary
+        if: always()
         run: |
-          go vet ./...
-          go test -race -v ./...
-          go test -bench=. -benchmem -run=^$ ./...
+          {
+            echo '### Core module coverage'
+            echo '```'
+            go tool cover -func=coverage.out | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run Volume & Fidelity Demo
-        run: go run ./cmd/demo
+  tidy:
+    name: go mod tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.x
+          cache-dependency-path: '**/go.sum'
+      - run: make tidy
 
-      - name: Run Benchmarks
-        run: go test -bench=. -benchmem -run=^$ ./...
+  vuln:
+    name: govulncheck (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [., grpcflightrec, otelflightrec]
+    steps:
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-input: 1.27.x
+          work-dir: ${{ matrix.module }}
 
   modules:
     # Builds each submodule the way a consumer does: without the local replace
     # directive, against the core version its go.mod requires. A failure means
     # the submodule needs a core release that has not been tagged yet.
-    name: Submodules build without replace
+    name: build without replace (${{ matrix.module }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         module: [grpcflightrec, otelflightrec]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.x'
-
+          go-version: 1.27.x
       - name: Build and vet without replace
         working-directory: ${{ matrix.module }}
         env:
@@ -83,3 +125,20 @@ jobs:
           go mod edit -dropreplace=github.com/divine-ai-com/flightrec
           go build ./...
           go vet ./...
+
+  smoke:
+    name: demo and benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.x
+          cache-dependency-path: '**/go.sum'
+      - run: make demo
+      # One iteration each: this checks the benchmarks run, not their speed.
+      - name: Benchmarks compile and run
+        run: |
+          for m in . grpcflightrec otelflightrec; do
+            (cd "$m" && go test -run='^$' -bench=. -benchtime=1x ./...) || exit 1
+          done
