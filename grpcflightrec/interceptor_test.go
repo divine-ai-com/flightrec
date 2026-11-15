@@ -11,12 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/grpcflightrec"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"github.com/divine-ai-com/flightrec"
+	"github.com/divine-ai-com/flightrec/grpcflightrec"
 )
 
 func parseLines(t *testing.T, buf *bytes.Buffer) []map[string]any {

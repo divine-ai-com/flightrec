@@ -9,11 +9,12 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/otelflightrec"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/divine-ai-com/flightrec"
+	"github.com/divine-ai-com/flightrec/otelflightrec"
 )
 
 func ExampleNewSpanProcessor() {

@@ -7,10 +7,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/divine-ai-com/flightrec/otelflightrec"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/divine-ai-com/flightrec/otelflightrec"
 )
 
 type noopSpanProcessor struct{}

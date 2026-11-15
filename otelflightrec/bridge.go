@@ -6,8 +6,9 @@ package otelflightrec
 import (
 	"context"
 
-	"github.com/divine-ai-com/flightrec"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/divine-ai-com/flightrec"
 )
 
 func init() {

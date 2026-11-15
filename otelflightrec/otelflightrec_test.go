@@ -19,8 +19,6 @@ import (
 	"testing/slogtest"
 	"time"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/otelflightrec"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	otellog "go.opentelemetry.io/otel/log"
@@ -28,6 +26,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/divine-ai-com/flightrec"
+	"github.com/divine-ai-com/flightrec/otelflightrec"
 )
 
 type syncBuffer struct {

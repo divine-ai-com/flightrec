@@ -9,11 +9,12 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/divine-ai-com/flightrec"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
-	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/divine-ai-com/flightrec"
 )
 
 const defaultInstrumentationName = "github.com/divine-ai-com/flightrec/otelflightrec"
@@ -21,7 +22,7 @@ const defaultInstrumentationName = "github.com/divine-ai-com/flightrec/otelfligh
 // LogHandlerOptions configures a LogHandler.
 type LogHandlerOptions struct {
 	// LoggerProvider is the OpenTelemetry LoggerProvider used to emit log
-	// records. If nil, global.GetLoggerProvider() is used.
+	// records. If nil, otel.GetLoggerProvider() is used.
 	LoggerProvider otellog.LoggerProvider
 
 	// InstrumentationName is the logger scope name passed to
@@ -73,7 +74,7 @@ var _ slog.Handler = (*LogHandler)(nil)
 func NewLogHandler(opts LogHandlerOptions) *LogHandler {
 	provider := opts.LoggerProvider
 	if provider == nil {
-		provider = global.GetLoggerProvider()
+		provider = otel.GetLoggerProvider()
 	}
 	name := opts.InstrumentationName
 	if name == "" {

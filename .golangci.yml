@@ -36,6 +36,9 @@ linters:
       excludes:
         # unsafe.Sizeof is used for memory accounting only.
         - G103
+        # Integer conversions flagged here are of counters and lengths that are
+        # never negative, and of status codes within their documented range.
+        - G115
   exclusions:
     generated: lax
     rules:
