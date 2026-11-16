@@ -3,7 +3,7 @@ module github.com/divine-ai-com/flightrec/grpcflightrec
 go 1.26.0
 
 require (
-	github.com/divine-ai-com/flightrec v0.6.1-0.20261116065331-d9df1ff2191a
+	github.com/divine-ai-com/flightrec v0.7.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
