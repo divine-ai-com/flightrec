@@ -21,8 +21,9 @@ func Example() {
 
 	email := flightrec.New(flightrec.Options{Next: printer("email"), Retain: time.Minute})
 	checkout := flightrec.New(flightrec.Options{Next: printer("checkout")})
-	defer email.StartNotifier(ctx, bus)()
-	defer checkout.StartNotifier(ctx, bus)()
+	// An in-process bus is a trusted channel; across processes, use WithSigningKey.
+	defer email.StartNotifier(ctx, bus, flightrec.WithoutSigning())()
+	defer checkout.StartNotifier(ctx, bus, flightrec.WithoutSigning())()
 	waitUntil(func() bool { return bus.Subscribers() == 2 })
 
 	sctx, sc := flightrec.StartScope(ctx, email, flightrec.ScopeMeta{TraceID: "order-7"})

@@ -257,9 +257,9 @@ func TestClientInterceptorRejectsUnknownTrailer(t *testing.T) {
 	}
 }
 
-func TestServerTrailerDisabled(t *testing.T) {
+func TestServerTrailerOffByDefault(t *testing.T) {
 	out := &lockedBuffer{}
-	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(out, nil), DisableFlushMarker: true})
+	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(out, nil)})
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer(grpc.UnaryInterceptor(grpcflightrec.UnaryServerInterceptor(rec)))
 	srv.RegisterService(&testServiceDesc, &testService{unary: func(context.Context) error {
@@ -278,7 +278,7 @@ func TestServerTrailerDisabled(t *testing.T) {
 	var trailer metadata.MD
 	_ = call(context.Background(), conn, grpc.Trailer(&trailer))
 	if got := trailer.Get(grpcflightrec.FlushTrailer); len(got) != 0 {
-		t.Errorf("trailer sent with DisableFlushMarker: %v", got)
+		t.Errorf("trailer sent by default: %v", got)
 	}
 }
 
