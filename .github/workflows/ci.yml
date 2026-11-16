@@ -175,6 +175,18 @@ jobs:
         # The program kills a server mid-request and fails unless the next
         # start recovers the request's debug logs.
         run: go run -race ./examples/crash-recovery
+      # A short run of every fuzz target on each change; longer runs are local.
+      - name: Fuzz
+        run: |
+          set -euo pipefail
+          fuzz() { go test -run='^$' -fuzz="^$2\$" -fuzztime=15s "$1"; }
+          fuzz . FuzzDecodeJournalPayloads
+          fuzz . FuzzRecoverJournal
+          fuzz . FuzzNotifierReceive
+          fuzz . FuzzExtractHTTPTraceID
+          fuzz . FuzzExtractTraceIDFromMetadata
+          fuzz ./internal/journal FuzzRead
+          fuzz ./internal/journal FuzzReadMutatedJournal
       # One iteration each: this checks the benchmarks run, not their speed.
       - name: Benchmarks compile and run
         run: |
