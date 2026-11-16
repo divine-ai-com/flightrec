@@ -59,7 +59,8 @@ type NotifierOption interface {
 
 // notifierConfig holds settings from NotifierOption values.
 type notifierConfig struct {
-	keys [][]byte // signing key first, then keys accepted for verification
+	keys     [][]byte // signing key first, then keys accepted for verification
+	unsigned bool     // WithoutSigning
 }
 
 const activeShards = 32
@@ -506,3 +507,11 @@ func WithSigningKey(key []byte, verifyAlso ...[]byte) NotifierOption {
 	}
 	return signingKeyOption{keys: cp}
 }
+
+type withoutSigningOption struct{}
+
+func (withoutSigningOption) applyNotifier(c *notifierConfig) { c.unsigned = true }
+
+// WithoutSigning runs a notifier without message signatures, for tests and
+// for channels that only trusted processes can publish on.
+func WithoutSigning() NotifierOption { return withoutSigningOption{} }
