@@ -72,7 +72,8 @@ func MarkerValue(reason string) (value string, ok bool) {
 //
 // When the scope is triggered before the response headers are written, the
 // handler writes a status of 500 or above, or the request has already run for
-// SlowAfter, the response carries FlushHeader. A scope triggered after the
+// SlowAfter, the response carries FlushHeader if Options.EnableFlushMarker is
+// set. A scope triggered after the
 // headers are written cannot add it, and a panic sends no response at all;
 // Stats.FlushMarkersMissed counts both.
 //

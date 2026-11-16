@@ -10,7 +10,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
   - Triggered scopes no longer mark responses with `Flightrec-Flush` (gRPC: a trailer). Set `Options.EnableFlushMarker`.
   - `StartNotifier` panics without `WithSigningKey`. Pass `WithoutSigning()` for a channel that only trusted processes can publish on.
 
-  Migration: add `TrustRequestTraceIDs: true, EnableFlushMarker: true` to the `Options` of internal services that use cross-service flush or forward request IDs, and pass `WithSigningKey(key)` (the same key in every service) or `WithoutSigning()` to `StartNotifier`. Public-facing services that set `IgnoreRequestTraceIDs` and `DisableFlushMarker` need no change.
+  Migration: add `TrustRequestTraceIDs: true, EnableFlushMarker: true` to the `Options` of internal services that use cross-service flush or forward request IDs, and pass `WithSigningKey(key)` (the same key in every service) or `WithoutSigning()` to `StartNotifier`. Without the opt-ins, a custom `GRPCMetadataExtractor` is not called, and the notifier and callers match requests only by an OpenTelemetry trace ID, never by a forwarded `X-Request-Id`. Without a signing option, `StartNotifier` panics at startup. Public-facing services that set `IgnoreRequestTraceIDs` and `DisableFlushMarker` need no change.
 
 ### Added
 - `Options.TrustRequestTraceIDs`, `Options.EnableFlushMarker` and the `WithoutSigning` notifier option.

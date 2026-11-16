@@ -396,6 +396,29 @@ func TestSecureDefaults(t *testing.T) {
 	if id, m := serve(Options{TrustRequestTraceIDs: true, EnableFlushMarker: true, IgnoreRequestTraceIDs: true, DisableFlushMarker: true}); id == "client-chosen" || m != "" {
 		t.Errorf("deprecated opt-outs ignored: trace ID %q, marker %q", id, m)
 	}
+	if _, m := serve(Options{DisableFlushMarker: true}); m != "" {
+		t.Errorf("DisableFlushMarker alone: marker %q", m)
+	}
+
+	grpcID := func(o Options) string {
+		o.Next = slog.DiscardHandler
+		var id string
+		ctx := WithIncomingMetadata(context.Background(), map[string][]string{"x-request-id": {"client-chosen"}})
+		custom := func(context.Context) string { return "custom-chosen" }
+		for _, extract := range []GRPCMetadataExtractor{nil, custom} {
+			_, _ = InvokeGRPCUnary(ctx, New(o), "/svc/M", extract, nil, func(ctx context.Context, _ any) (any, error) {
+				id += TraceID(ctx) + " "
+				return nil, nil
+			})
+		}
+		return id
+	}
+	if id := grpcID(Options{}); strings.Contains(id, "chosen") {
+		t.Errorf("gRPC defaults took a client trace ID: %q", id)
+	}
+	if id := grpcID(Options{TrustRequestTraceIDs: true}); id != "client-chosen custom-chosen " {
+		t.Errorf("gRPC opted in: %q", id)
+	}
 
 	rec := New(Options{Next: slog.DiscardHandler})
 	func() {

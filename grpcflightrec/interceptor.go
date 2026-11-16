@@ -6,7 +6,8 @@
 // dependencies.
 //
 // Server interceptors open a flightrec Scope per RPC and, when the scope is
-// triggered, set the FlushTrailer trailer on the response. Client interceptors
+// triggered, set the FlushTrailer trailer on the response if
+// Options.EnableFlushMarker is set. Client interceptors
 // read that trailer and trigger the caller's scope, so a failure in a service
 // you call keeps your logs for the same request too.
 package grpcflightrec
@@ -46,9 +47,9 @@ func newClientConfig(opts []ClientOption) clientConfig {
 }
 
 // UnaryServerInterceptor returns a grpc.UnaryServerInterceptor that opens a
-// flightrec Scope for each unary RPC, extracts the trace ID from incoming gRPC
-// metadata ("traceparent", "x-trace-id", or "x-request-id") unless the context
-// already carries an OpenTelemetry trace, and flushes the
+// flightrec Scope for each unary RPC, takes the trace ID from the context's
+// OpenTelemetry trace or, with Options.TrustRequestTraceIDs, from incoming gRPC
+// metadata ("traceparent", "x-trace-id", or "x-request-id"), and flushes the
 // buffer only on server-side faults (Unknown, DeadlineExceeded, Unimplemented,
 // Internal, Unavailable, DataLoss), error logs, panics, slow RPCs, or explicit
 // calls to flightrec.Flush.
@@ -84,8 +85,7 @@ func UnaryServerInterceptor(rec *flightrec.Recorder) grpc.UnaryServerInterceptor
 
 // StreamServerInterceptor returns a grpc.StreamServerInterceptor that opens a
 // flightrec Scope for each streaming RPC, enriches stream.Context() with the
-// scope, takes the trace ID from the context's OpenTelemetry trace or else from
-// incoming gRPC metadata, and flushes the
+// scope, takes the trace ID as UnaryServerInterceptor does, and flushes the
 // buffer only on server-side faults, error logs, panics, slow streams, or
 // explicit calls to flightrec.Flush.
 func StreamServerInterceptor(rec *flightrec.Recorder) grpc.StreamServerInterceptor {
