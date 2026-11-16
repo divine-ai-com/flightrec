@@ -20,9 +20,8 @@ import (
 //
 // Its value is a built-in flush reason such as error_log, http_502, panic or
 // slow_request. Reasons passed to Flush by application code are sent as
-// explicit_flush, so custom reason text never leaves the process. Set
-// Options.DisableFlushMarker on services that answer clients outside your
-// system.
+// explicit_flush, so custom reason text never leaves the process. Responses
+// carry it only with Options.EnableFlushMarker.
 //
 // HTTPMiddleware removes FlushHeader from incoming requests before the handler
 // runs, so a handler that proxies requests cannot forward one.
@@ -88,8 +87,7 @@ func MarkerValue(reason string) (value string, ok bool) {
 // a generated or header ID with the server span's trace when the span starts,
 // so logs and spans agree in either order; a header ID stays an alias for
 // cross-service flush.
-// Services that receive requests from outside your system should set
-// Options.IgnoreRequestTraceIDs. The buffer
+// Request headers are used only with Options.TrustRequestTraceIDs. The buffer
 // is flushed if an error log is recorded, the response status is 5xx, the
 // handler panics (except http.ErrAbortHandler), the duration exceeds SlowAfter,
 // or Flush(ctx, reason) is called explicitly.
@@ -412,7 +410,7 @@ func (t *transport) CloseIdleConnections() {
 }
 
 // SendFlushMarker sends this scope's flush marker if the scope is triggered
-// and Options.DisableFlushMarker is not set: it calls send with the marker
+// and Options.EnableFlushMarker is set: it calls send with the marker
 // value (a built-in reason, see MarkerValue) and reports whether a marker was
 // sent. A nil error from send counts in Stats.FlushMarkersSent; an error
 // counts in Stats.FlushMarkersMissed. An untriggered scope calls nothing.

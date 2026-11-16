@@ -34,9 +34,10 @@ func newNode(t *testing.T, n flightrec.Notifier, opts flightrec.Options) *node {
 	opts.Next = slog.NewJSONHandler(nd.out, &slog.HandlerOptions{Level: slog.LevelDebug})
 	opts.PassLeveler = slog.LevelWarn
 	opts.BufferLeveler = slog.LevelDebug
+	opts.TrustRequestTraceIDs = true
 	nd.rec = flightrec.New(opts)
 	nd.log = slog.New(nd.rec)
-	stop := nd.rec.StartNotifier(context.Background(), n)
+	stop := nd.rec.StartNotifier(context.Background(), n, flightrec.WithoutSigning())
 	t.Cleanup(stop)
 	return nd
 }
@@ -79,8 +80,8 @@ func failRequest(n *node, traceID string) {
 
 func TestNotifierFlushesRetainedScopeInAnotherProcess(t *testing.T) {
 	bus := memnotifier.New()
-	b := newNode(t, bus, flightrec.Options{Retain: time.Minute})
-	c := newNode(t, bus, flightrec.Options{})
+	b := newNode(t, bus, flightrec.Options{Retain: time.Minute, TrustRequestTraceIDs: true, EnableFlushMarker: true})
+	c := newNode(t, bus, flightrec.Options{TrustRequestTraceIDs: true, EnableFlushMarker: true})
 	listening(t, bus, 2)
 
 	healthyRequest(b.rec, b.log, "trace-1", "b: queued email")
@@ -239,7 +240,7 @@ func TestNotifierResubscribesAfterError(t *testing.T) {
 func TestNotifierStop(t *testing.T) {
 	bus := memnotifier.New()
 	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
-	stop := rec.StartNotifier(context.Background(), bus)
+	stop := rec.StartNotifier(context.Background(), bus, flightrec.WithoutSigning())
 	listening(t, bus, 1)
 	stop()
 	stop() // idempotent
@@ -409,7 +410,7 @@ func TestExplicitTraceIDIsNeverAdopted(t *testing.T) {
 // TestAliasRetainedCap checks that the per-trace cap of retained scopes holds
 // for a forwarded request ID shared by many scopes with their own span traces.
 func TestAliasRetainedCap(t *testing.T) {
-	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug, Retain: time.Minute})
+	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, BufferLeveler: slog.LevelDebug, Retain: time.Minute, TrustRequestTraceIDs: true})
 	log := slog.New(rec)
 	for i := range 20 {
 		h := flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -460,7 +461,7 @@ func TestSignedNotifier(t *testing.T) {
 	bus := memnotifier.New()
 	b := start(bus, flightrec.WithSigningKey(key))
 	forger := start(bus, flightrec.WithSigningKey([]byte("ffffffffffffffffffffffffffffffff")))
-	plain := start(bus)
+	plain := start(bus, flightrec.WithoutSigning())
 	c := start(bus, flightrec.WithSigningKey(key))
 	listening(t, bus, 4)
 

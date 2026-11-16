@@ -74,12 +74,13 @@ func main() {
 	// 2. flightrec: buffers Debug/Info, flushes on failure, 1 summary line on healthy
 	var flightBuf bytes.Buffer
 	rec := flightrec.New(flightrec.Options{
-		Next:          slog.NewJSONHandler(&flightBuf, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLeveler:   slog.LevelWarn,
-		BufferLeveler: slog.LevelDebug,
-		SlowAfter:     2 * time.Second,
-		MaxPerScope:   256 << 10,
-		MaxTotal:      64 << 20,
+		TrustRequestTraceIDs: true, // requests carry their trace ID in X-Trace-Id
+		Next:                 slog.NewJSONHandler(&flightBuf, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		PassLeveler:          slog.LevelWarn,
+		BufferLeveler:        slog.LevelDebug,
+		SlowAfter:            2 * time.Second,
+		MaxPerScope:          256 << 10,
+		MaxTotal:             64 << 20,
 	})
 	flightLogger := slog.New(rec)
 	wrappedHandler := flightrec.HTTPMiddleware(rec)(makeAppHandler(flightLogger))

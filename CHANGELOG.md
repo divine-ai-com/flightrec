@@ -4,8 +4,19 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Changed
+- Safe defaults. Each was an opt-out before; services that only your own services call opt back in:
+  - Request headers and gRPC metadata (`traceparent`, `X-Trace-Id`, `X-Request-Id`) no longer choose trace IDs. Set `Options.TrustRequestTraceIDs`.
+  - Triggered scopes no longer mark responses with `Flightrec-Flush` (gRPC: a trailer). Set `Options.EnableFlushMarker`.
+  - `StartNotifier` panics without `WithSigningKey`. Pass `WithoutSigning()` for a channel that only trusted processes can publish on.
+
+  Migration: add `TrustRequestTraceIDs: true, EnableFlushMarker: true` to the `Options` of internal services that use cross-service flush or forward request IDs, and pass `WithSigningKey(key)` (the same key in every service) or `WithoutSigning()` to `StartNotifier`. Public-facing services that set `IgnoreRequestTraceIDs` and `DisableFlushMarker` need no change.
+
 ### Added
-- `Options.TrustRequestTraceIDs`, `Options.EnableFlushMarker` and the `WithoutSigning` notifier option, the opt-ins for the safe defaults planned for v0.7.0. They change nothing yet.
+- `Options.TrustRequestTraceIDs`, `Options.EnableFlushMarker` and the `WithoutSigning` notifier option.
+
+### Deprecated
+- `Options.IgnoreRequestTraceIDs` and `Options.DisableFlushMarker`: they are the default now. They still override the new options.
 
 ## [v0.6.0] - 2026-11-15
 

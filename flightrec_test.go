@@ -61,9 +61,11 @@ func (b *syncBuffer) Lines(t *testing.T) []map[string]any {
 func TestHealthyRequestDropsBufferAndWritesSummary(t *testing.T) {
 	out := &syncBuffer{}
 	rec := flightrec.New(flightrec.Options{
-		Next:          slog.NewJSONHandler(out, nil),
-		PassLeveler:   slog.LevelWarn,
-		BufferLeveler: slog.LevelDebug,
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
+		Next:                 slog.NewJSONHandler(out, nil),
+		PassLeveler:          slog.LevelWarn,
+		BufferLeveler:        slog.LevelDebug,
 	})
 	logger := slog.New(rec)
 
@@ -175,10 +177,12 @@ func TestTriggersFlushBufferedRecordsInOrder(t *testing.T) {
 			var nowMu sync.Mutex
 
 			rec := flightrec.New(flightrec.Options{
-				Next:          slog.NewJSONHandler(out, nil),
-				PassLeveler:   slog.LevelWarn,
-				BufferLeveler: slog.LevelDebug,
-				SlowAfter:     tc.slowAfter,
+				TrustRequestTraceIDs: true,
+				EnableFlushMarker:    true,
+				Next:                 slog.NewJSONHandler(out, nil),
+				PassLeveler:          slog.LevelWarn,
+				BufferLeveler:        slog.LevelDebug,
+				SlowAfter:            tc.slowAfter,
 				Now: func() time.Time {
 					nowMu.Lock()
 					defer nowMu.Unlock()
@@ -342,7 +346,9 @@ func TestWithAttrsAndWithGroupPreservedOnFlush(t *testing.T) {
 func TestGRPCUnaryHelper(t *testing.T) {
 	out := &syncBuffer{}
 	rec := flightrec.New(flightrec.Options{
-		Next: slog.NewJSONHandler(out, nil),
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
+		Next:                 slog.NewJSONHandler(out, nil),
 	})
 	logger := slog.New(rec)
 
@@ -809,9 +815,11 @@ func TestGRPCErrorClassificationAndStream(t *testing.T) {
 	t.Run("NotFound client error does not flush and logs grpc.code=5", func(t *testing.T) {
 		out := &syncBuffer{}
 		rec := flightrec.New(flightrec.Options{
-			Next:          slog.NewJSONHandler(out, nil),
-			PassLeveler:   slog.LevelWarn,
-			BufferLeveler: slog.LevelDebug,
+			TrustRequestTraceIDs: true,
+			EnableFlushMarker:    true,
+			Next:                 slog.NewJSONHandler(out, nil),
+			PassLeveler:          slog.LevelWarn,
+			BufferLeveler:        slog.LevelDebug,
 		})
 		logger := slog.New(rec)
 
@@ -848,9 +856,11 @@ func TestGRPCErrorClassificationAndStream(t *testing.T) {
 	t.Run("streaming server fault flushes buffer", func(t *testing.T) {
 		out := &syncBuffer{}
 		rec := flightrec.New(flightrec.Options{
-			Next:          slog.NewJSONHandler(out, nil),
-			PassLeveler:   slog.LevelWarn,
-			BufferLeveler: slog.LevelDebug,
+			TrustRequestTraceIDs: true,
+			EnableFlushMarker:    true,
+			Next:                 slog.NewJSONHandler(out, nil),
+			PassLeveler:          slog.LevelWarn,
+			BufferLeveler:        slog.LevelDebug,
 		})
 		logger := slog.New(rec)
 

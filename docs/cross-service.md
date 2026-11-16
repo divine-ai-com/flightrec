@@ -14,8 +14,10 @@ client := &http.Client{Transport: flightrec.NewTransport(http.DefaultTransport)}
 
 ```go
 rec := flightrec.New(flightrec.Options{
-	Next:   handler,
-	Retain: 30 * time.Second, // keep healthy requests' logs this long
+	Next:                 handler,
+	Retain:               30 * time.Second, // keep healthy requests' logs this long
+	TrustRequestTraceIDs: true,             // match requests by the trace ID callers forward
+	EnableFlushMarker:    true,             // tell callers when a request was kept
 })
 
 n, err := redisnotifier.New(redisClient, redisnotifier.WithChannel("flightrec:prod"))
@@ -37,7 +39,7 @@ Limits to plan for:
 - **Notices are rate limited.** Each process publishes at most 100 messages per second (bursts of 200; each message batches up to 64 notices) and acts on at most 50 matching notices per second (bursts of 100). Notices that do not fit are counted in `NotifierPublishDropped` and `NotifierDeliveryDropped`. A lost subscription is retried with backoff of up to 30 seconds, plus up to 20% jitter.
 - **A NATS outage does not show in `Stats`.** The NATS client buffers publishes while it reconnects, so they count as published.
 
-On a service that answers clients outside your system, set `DisableFlushMarker: true` and `IgnoreRequestTraceIDs: true`, so you neither tell outsiders about your failures nor let them choose the trace IDs your logs are grouped by. With OpenTelemetry middleware in front, also mark it public (`otelhttp.WithPublicEndpoint()`), or the client's `traceparent` still becomes the span's trace, and so flightrec's.
+Request trust and flush markers are off by default; turn them on only on services that your own services call, never on one that answers clients outside your system. See [Running flightrec safely](security.md).
 
 [`examples/cross-service`](../examples/cross-service) runs three services through both cases, in one process or with Docker Compose and Redis.
 

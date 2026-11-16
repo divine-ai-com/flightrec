@@ -105,7 +105,8 @@ type notifierHub struct {
 }
 
 // StartNotifier connects the Recorder to n until ctx is done or stop is
-// called. While connected:
+// called. It panics unless opts include WithSigningKey, or WithoutSigning for
+// a channel that only trusted processes can publish on. While connected:
 //
 //   - a scope triggered by a local failure announces its trace ID once;
 //     scopes triggered by a downstream marker or a remote notice do not, so
@@ -127,6 +128,9 @@ func (r *Recorder) StartNotifier(ctx context.Context, n Notifier, opts ...Notifi
 	var cfg notifierConfig
 	for _, o := range opts {
 		o.applyNotifier(&cfg)
+	}
+	if len(cfg.keys) == 0 && !cfg.unsigned {
+		panic("flightrec: StartNotifier needs WithSigningKey, or WithoutSigning for a trusted channel")
 	}
 	st := r.state
 	st.hubMu.Lock()

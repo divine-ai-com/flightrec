@@ -242,9 +242,9 @@ func TestMiddlewareTraceIDSource(t *testing.T) {
 		header string
 		want   func(string) bool
 	}{
-		{"valid header is used", Options{}, "req-1041", func(id string) bool { return id == "req-1041" }},
-		{"invalid header is replaced by a generated ID", Options{}, "a b c", isGeneratedID},
-		{"IgnoreRequestTraceIDs ignores a valid header", Options{IgnoreRequestTraceIDs: true}, "req-1041", isGeneratedID},
+		{"valid header is used", Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}, "req-1041", func(id string) bool { return id == "req-1041" }},
+		{"invalid header is replaced by a generated ID", Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}, "a b c", isGeneratedID},
+		{"IgnoreRequestTraceIDs ignores a valid header", Options{IgnoreRequestTraceIDs: true, TrustRequestTraceIDs: true, EnableFlushMarker: true}, "req-1041", isGeneratedID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.opts.Next = slog.NewJSONHandler(io.Discard, nil)
@@ -265,7 +265,7 @@ func TestMiddlewareTraceIDSource(t *testing.T) {
 
 func TestGRPCTraceIDSource(t *testing.T) {
 	st := func(o Options) *recorderState { o.Next = slog.DiscardHandler; return New(o).state }
-	plain, ignore := st(Options{}), st(Options{IgnoreRequestTraceIDs: true})
+	plain, ignore := st(Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}), st(Options{IgnoreRequestTraceIDs: true, TrustRequestTraceIDs: true, EnableFlushMarker: true})
 	ctx := WithIncomingMetadata(context.Background(), map[string][]string{"x-request-id": {"req-9"}})
 	if got := resolveGRPCTraceID(ctx, plain, nil); got != "req-9" {
 		t.Errorf("metadata trace ID = %q, want req-9", got)
@@ -366,4 +366,53 @@ func FuzzExtractTraceIDFromMetadata(f *testing.F) {
 			t.Fatalf("result %q is not a valid input value", got)
 		}
 	})
+}
+
+// TestSecureDefaults pins the defaults: request headers do not choose trace
+// IDs, responses carry no flush marker, and a notifier needs a signing key or
+// an explicit WithoutSigning.
+func TestSecureDefaults(t *testing.T) {
+	serve := func(o Options) (traceID, marker string) {
+		o.Next = slog.DiscardHandler
+		rec := New(o)
+		h := HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			traceID = TraceID(r.Context())
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Request-Id", "client-chosen")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return traceID, rr.Header().Get(FlushHeader)
+	}
+
+	if id, m := serve(Options{}); id == "client-chosen" || m != "" {
+		t.Errorf("defaults: trace ID %q, marker %q; want generated and none", id, m)
+	}
+	if id, m := serve(Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}); id != "client-chosen" || m != "http_502" {
+		t.Errorf("opted in: trace ID %q, marker %q", id, m)
+	}
+	// The deprecated opt-outs still win over the opt-ins.
+	if id, m := serve(Options{TrustRequestTraceIDs: true, EnableFlushMarker: true, IgnoreRequestTraceIDs: true, DisableFlushMarker: true}); id == "client-chosen" || m != "" {
+		t.Errorf("deprecated opt-outs ignored: trace ID %q, marker %q", id, m)
+	}
+
+	rec := New(Options{Next: slog.DiscardHandler})
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("StartNotifier without a signing key did not panic")
+			}
+		}()
+		rec.StartNotifier(context.Background(), nopNotifier{})
+	}()
+	rec.StartNotifier(context.Background(), nopNotifier{}, WithoutSigning())()
+}
+
+type nopNotifier struct{}
+
+func (nopNotifier) Publish(context.Context, []byte) error { return nil }
+func (nopNotifier) Subscribe(ctx context.Context, _ func([]byte)) error {
+	<-ctx.Done()
+	return nil
 }
