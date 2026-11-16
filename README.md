@@ -6,6 +6,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/divine-ai-com/flightrec.svg)](https://pkg.go.dev/github.com/divine-ai-com/flightrec)
 [![Release](https://img.shields.io/github/v/release/divine-ai-com/flightrec?sort=semver)](https://github.com/divine-ai-com/flightrec/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/divine-ai-com/flightrec/badge)](https://scorecard.dev/viewer/?uri=github.com/divine-ai-com/flightrec)
 
 <p align="center">
   <img src="docs/media/walkthrough.svg" alt="flightrec walkthrough: the problem, how per-request buffering works, cross-service flush, crash recovery and OpenTelemetry spans" width="100%">
