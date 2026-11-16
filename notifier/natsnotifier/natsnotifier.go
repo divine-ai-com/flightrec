@@ -15,7 +15,7 @@
 //	if err != nil {
 //		return err
 //	}
-//	stop := rec.StartNotifier(ctx, n)
+//	stop := rec.StartNotifier(ctx, n, flightrec.WithSigningKey(key))
 //	defer stop()
 //
 // NATS core messaging is fire and forget, which matches flightrec's best

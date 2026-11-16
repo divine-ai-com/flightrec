@@ -97,7 +97,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	svc := newService(*role, *next, &output{w: os.Stdout})
-	defer svc.rec.StartNotifier(ctx, n)()
+	defer svc.rec.StartNotifier(ctx, n, flightrec.WithSigningKey(notifierKey()))()
 
 	srv := &http.Server{Addr: *listen, Handler: svc.handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -126,6 +126,10 @@ func newService(name, next string, out *output) *service {
 		PassLeveler:   slog.LevelWarn,
 		BufferLeveler: slog.LevelDebug,
 		Retain:        30 * time.Second,
+		// The three services only call each other: they trust each other's
+		// trace ID headers and flush markers.
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
 	})
 	return &service{
 		name:   name,
@@ -245,7 +249,7 @@ func runAll(out *output) error {
 		srv := &http.Server{Handler: svc.handler(), ReadHeaderTimeout: 5 * time.Second}
 		go func() { _ = srv.Serve(ln) }()
 		defer func() { _ = srv.Close() }()
-		defer svc.rec.StartNotifier(ctx, bus)()
+		defer svc.rec.StartNotifier(ctx, bus, flightrec.WithSigningKey(notifierKey()))()
 	}
 	orders.next, gateway.next = urls[0], urls[1]
 	if err := waitFor(func() bool { return bus.Subscribers() == len(services) }); err != nil {
@@ -346,4 +350,13 @@ func dropTime(groups []string, a slog.Attr) slog.Attr {
 		return slog.Attr{}
 	}
 	return a
+}
+
+// notifierKey is the key that signs notifier messages, shared by every
+// service: FLIGHTREC_NOTIFIER_KEY in production, a fixed key for the demo.
+func notifierKey() []byte {
+	if k := os.Getenv("FLIGHTREC_NOTIFIER_KEY"); len(k) >= 32 {
+		return []byte(k)
+	}
+	return []byte("demo-only-key-not-for-production!")
 }

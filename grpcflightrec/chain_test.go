@@ -111,9 +111,11 @@ func startNode(t *testing.T, svc *testService) *node {
 	t.Helper()
 	n := &node{out: &lockedBuffer{}}
 	n.rec = flightrec.New(flightrec.Options{
-		Next:          slog.NewJSONHandler(n.out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLeveler:   slog.LevelWarn,
-		BufferLeveler: slog.LevelDebug,
+		Next:                 slog.NewJSONHandler(n.out, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		PassLeveler:          slog.LevelWarn,
+		BufferLeveler:        slog.LevelDebug,
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
 	})
 	n.log = slog.New(n.rec)
 
@@ -306,7 +308,7 @@ func TestClientStreamingFlushPropagates(t *testing.T) {
 }
 
 func TestTrailerSentWhenHandlerPanics(t *testing.T) {
-	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
+	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, EnableFlushMarker: true})
 	recovery := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (resp any, err error) {
 		defer func() {
 			if p := recover(); p != nil {

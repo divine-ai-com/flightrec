@@ -3,7 +3,7 @@ module github.com/divine-ai-com/flightrec/examples/cross-service
 go 1.26.0
 
 require (
-	github.com/divine-ai-com/flightrec v0.3.0
+	github.com/divine-ai-com/flightrec v0.6.1-0.20261116065331-d9df1ff2191a
 	github.com/divine-ai-com/flightrec/notifier/redisnotifier v0.3.0
 	github.com/redis/go-redis/v9 v9.23.0
 )
