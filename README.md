@@ -205,3 +205,12 @@ See [CONTRIBUTING.md](.github/CONTRIBUTING.md). To report a vulnerability, follo
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+<p align="center">
+  <a href="https://github.com/divine-ai-com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/divine-ai-lockup-for-dark-bg.svg">
+      <img src="docs/media/divine-ai-lockup-for-light-bg.svg" alt="divine-ai" width="140">
+    </picture>
+  </a>
+</p>
