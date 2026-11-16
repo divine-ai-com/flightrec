@@ -10,7 +10,7 @@
 //	if err != nil {
 //		return err
 //	}
-//	stop := rec.StartNotifier(ctx, n)
+//	stop := rec.StartNotifier(ctx, n, flightrec.WithSigningKey(key))
 //	defer stop()
 //
 // Redis pub/sub is fire and forget: a process that is disconnected when a

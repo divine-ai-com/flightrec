@@ -42,9 +42,11 @@ func TestUnaryServerInterceptor(t *testing.T) {
 	t.Run("client error NotFound does not flush and extracts metadata trace ID", func(t *testing.T) {
 		var buf bytes.Buffer
 		rec := flightrec.New(flightrec.Options{
-			Next:          slog.NewJSONHandler(&buf, nil),
-			PassLeveler:   slog.LevelWarn,
-			BufferLeveler: slog.LevelDebug,
+			Next:                 slog.NewJSONHandler(&buf, nil),
+			PassLeveler:          slog.LevelWarn,
+			BufferLeveler:        slog.LevelDebug,
+			TrustRequestTraceIDs: true,
+			EnableFlushMarker:    true,
 		})
 		logger := slog.New(rec)
 		ic := grpcflightrec.UnaryServerInterceptor(rec)
@@ -79,9 +81,11 @@ func TestUnaryServerInterceptor(t *testing.T) {
 	t.Run("server error Internal flushes buffered records", func(t *testing.T) {
 		var buf bytes.Buffer
 		rec := flightrec.New(flightrec.Options{
-			Next:          slog.NewJSONHandler(&buf, nil),
-			PassLeveler:   slog.LevelWarn,
-			BufferLeveler: slog.LevelDebug,
+			Next:                 slog.NewJSONHandler(&buf, nil),
+			PassLeveler:          slog.LevelWarn,
+			BufferLeveler:        slog.LevelDebug,
+			TrustRequestTraceIDs: true,
+			EnableFlushMarker:    true,
 		})
 		logger := slog.New(rec)
 		ic := grpcflightrec.UnaryServerInterceptor(rec)
@@ -129,9 +133,11 @@ func (f *fakeServerStream) SetTrailer(md metadata.MD) {
 func TestStreamServerInterceptor(t *testing.T) {
 	var buf bytes.Buffer
 	rec := flightrec.New(flightrec.Options{
-		Next:          slog.NewJSONHandler(&buf, nil),
-		PassLeveler:   slog.LevelWarn,
-		BufferLeveler: slog.LevelDebug,
+		Next:                 slog.NewJSONHandler(&buf, nil),
+		PassLeveler:          slog.LevelWarn,
+		BufferLeveler:        slog.LevelDebug,
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
 	})
 	logger := slog.New(rec)
 	ic := grpcflightrec.StreamServerInterceptor(rec)
