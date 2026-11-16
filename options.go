@@ -89,6 +89,16 @@ type Options struct {
 	// outside your system, such as a public API or an edge gateway.
 	DisableFlushMarker bool
 
+	// TrustRequestTraceIDs lets HTTPMiddleware and the gRPC helpers take trace
+	// IDs from request headers and metadata (traceparent, X-Trace-Id,
+	// X-Request-Id). Set it on services that only your own services call.
+	TrustRequestTraceIDs bool
+
+	// EnableFlushMarker lets triggered scopes mark their responses with
+	// FlushHeader (gRPC: a trailer), so callers keep their logs too. Set it on
+	// services that only your own services call.
+	EnableFlushMarker bool
+
 	// Retain keeps the buffer of a healthy scope for this long after the scope
 	// ends, so a failure reported later for the same trace ID can still write
 	// it with Recorder.FlushTrace (or, with a notifier, from another service).
@@ -127,3 +137,9 @@ func (st *recorderState) passLevel() slog.Level {
 func (st *recorderState) bufferLevel() slog.Level {
 	return st.bufferLeveler.Level()
 }
+
+// trustRequestIDs reports whether trace IDs may come from request headers.
+func (st *recorderState) trustRequestIDs() bool { return !st.opts.IgnoreRequestTraceIDs }
+
+// sendFlushMarkers reports whether responses may carry FlushHeader.
+func (st *recorderState) sendFlushMarkers() bool { return !st.opts.DisableFlushMarker }
