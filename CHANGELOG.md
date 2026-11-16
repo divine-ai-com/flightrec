@@ -4,6 +4,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Added
+- `Options.TrustRequestTraceIDs`, `Options.EnableFlushMarker` and the `WithoutSigning` notifier option, the opt-ins for the safe defaults planned for v0.7.0. They change nothing yet.
+
 ## [v0.6.0] - 2026-11-15
 
 Security hardening from a review of the whole package, and a cleaner repository layout. The layout change moves no exported identifier: import paths, the API and every log line are unchanged.
