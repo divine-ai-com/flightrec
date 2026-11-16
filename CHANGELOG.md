@@ -4,6 +4,12 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+## [v0.7.0] - 2026-11-16
+
+Safe defaults: a client can no longer choose trace IDs or learn from responses that an error was logged, and a notifier no longer starts unauthenticated by accident. **Breaking:** internal services that rely on forwarded request IDs or flush markers must opt in, and `StartNotifier` needs a signing option; see the migration note below.
+
+Modules released: core `v0.7.0`, `grpcflightrec/v0.4.0`, `notifier/redisnotifier/v0.4.0` and `notifier/natsnotifier/v0.4.0` (each requiring core `v0.7.0`). `otelflightrec` is unchanged at `v0.3.1`.
+
 ### Changed
 - Safe defaults. Each was an opt-out before; services that only your own services call opt back in:
   - Request headers and gRPC metadata (`traceparent`, `X-Trace-Id`, `X-Request-Id`) no longer choose trace IDs. Set `Options.TrustRequestTraceIDs`.
@@ -17,6 +23,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ### Deprecated
 - `Options.IgnoreRequestTraceIDs` and `Options.DisableFlushMarker`: they are the default now. They still override the new options.
+
+### Security
+- CI runs OpenSSF Scorecard and every fuzz target on each change, and CodeQL scans Go and the workflows.
 
 ## [v0.6.0] - 2026-11-15
 
