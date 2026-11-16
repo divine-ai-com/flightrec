@@ -75,29 +75,29 @@ type Options struct {
 	// (64 MB) when <= 0.
 	MaxTotal int64
 
-	// IgnoreRequestTraceIDs stops HTTPMiddleware and the gRPC helpers
-	// (including any GRPCMetadataExtractor passed to them) from taking trace
-	// IDs from traceparent, X-Trace-Id and X-Request-Id on incoming requests.
-	// Set it on services that receive requests from clients outside your
-	// system: a client could otherwise choose the trace ID that groups its
-	// requests. The trace ID then comes from an active OpenTelemetry span
-	// when one is present, or is generated.
-	IgnoreRequestTraceIDs bool
-
-	// DisableFlushMarker stops HTTPMiddleware from setting the FlushHeader
-	// response header. Set it on services whose responses go to clients
-	// outside your system, such as a public API or an edge gateway.
-	DisableFlushMarker bool
-
-	// TrustRequestTraceIDs lets HTTPMiddleware and the gRPC helpers take trace
-	// IDs from request headers and metadata (traceparent, X-Trace-Id,
-	// X-Request-Id). Set it on services that only your own services call.
+	// TrustRequestTraceIDs lets HTTPMiddleware and the gRPC helpers (including
+	// any GRPCMetadataExtractor passed to them) take trace IDs from
+	// traceparent, X-Trace-Id and X-Request-Id on incoming requests. Off by
+	// default, because a client could choose the trace ID that groups its
+	// requests; the trace ID then comes from an active OpenTelemetry span or
+	// is generated. Set it on services that only your own services call.
 	TrustRequestTraceIDs bool
 
 	// EnableFlushMarker lets triggered scopes mark their responses with
-	// FlushHeader (gRPC: a trailer), so callers keep their logs too. Set it on
-	// services that only your own services call.
+	// FlushHeader (gRPC: a trailer), so callers keep their logs too. Off by
+	// default, because the marker tells a client that an error was logged.
+	// Set it on services that only your own services call.
 	EnableFlushMarker bool
+
+	// IgnoreRequestTraceIDs overrides TrustRequestTraceIDs.
+	//
+	// Deprecated: request trace IDs are ignored by default since v0.7.0.
+	IgnoreRequestTraceIDs bool
+
+	// DisableFlushMarker overrides EnableFlushMarker.
+	//
+	// Deprecated: flush markers are off by default since v0.7.0.
+	DisableFlushMarker bool
 
 	// Retain keeps the buffer of a healthy scope for this long after the scope
 	// ends, so a failure reported later for the same trace ID can still write
@@ -139,7 +139,11 @@ func (st *recorderState) bufferLevel() slog.Level {
 }
 
 // trustRequestIDs reports whether trace IDs may come from request headers.
-func (st *recorderState) trustRequestIDs() bool { return !st.opts.IgnoreRequestTraceIDs }
+func (st *recorderState) trustRequestIDs() bool {
+	return st.opts.TrustRequestTraceIDs && !st.opts.IgnoreRequestTraceIDs
+}
 
 // sendFlushMarkers reports whether responses may carry FlushHeader.
-func (st *recorderState) sendFlushMarkers() bool { return !st.opts.DisableFlushMarker }
+func (st *recorderState) sendFlushMarkers() bool {
+	return st.opts.EnableFlushMarker && !st.opts.DisableFlushMarker
+}

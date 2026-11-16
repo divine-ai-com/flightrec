@@ -35,7 +35,8 @@ type incomingMetadataContextKey struct{}
 
 // WithIncomingMetadata attaches a gRPC metadata map to ctx so that
 // InvokeGRPCUnary and InvokeGRPCStream can extract W3C traceparent,
-// x-trace-id, or x-request-id headers when extractTraceID is nil.
+// x-trace-id, or x-request-id headers when extractTraceID is nil. Metadata and
+// extractors are used only with Options.TrustRequestTraceIDs.
 func WithIncomingMetadata(ctx context.Context, md map[string][]string) context.Context {
 	return context.WithValue(ctx, incomingMetadataContextKey{}, md)
 }

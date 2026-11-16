@@ -2,19 +2,21 @@
 
 flightrec sits on the request path and holds your services' debug logs, so treat its inputs as untrusted and its buffers as sensitive. This page lists what to set, and why. To report a vulnerability, follow the [security policy](../.github/SECURITY.md).
 
-## Services that answer clients outside your system
+## Safe by default
 
-A client controls its request headers. By default flightrec takes the trace ID from `traceparent`, `X-Trace-Id` or `X-Request-Id`, and marks kept responses with a `Flightrec-Flush` header, which suits services that only other services of yours call. On a public API, a client that knows or guesses another request's ID (sequential request IDs are guessable) could make that request's retained logs flush or be evicted, and the marker tells it when your service logged an error. Set:
+A client controls its request headers. By default flightrec ignores the trace IDs in `traceparent`, `X-Trace-Id` and `X-Request-Id`, sends no `Flightrec-Flush` header or gRPC trailer, and refuses to start a notifier without a signing key. A client that knew or guessed another request's ID could otherwise make that request's retained logs flush or be evicted, and the marker would tell it when your service logged an error.
+
+On services that only your own services call, opt in, so cross-service flush can match requests by a forwarded ID and callers keep their logs:
 
 ```go
 rec := flightrec.New(flightrec.Options{
 	// ...
-	IgnoreRequestTraceIDs: true, // trace IDs come from your own tracing, or are generated
-	DisableFlushMarker:    true, // no Flightrec-Flush header or gRPC trailer on responses
+	TrustRequestTraceIDs: true, // take trace IDs from request headers and metadata
+	EnableFlushMarker:    true, // mark responses of kept requests for the caller
 })
 ```
 
-With OpenTelemetry middleware in front, also mark it public (`otelhttp.WithPublicEndpoint()`), or the client's `traceparent` still becomes the span's trace, and so flightrec's.
+With OpenTelemetry propagation, the span decides the trace ID either way; on a public service, mark the OpenTelemetry middleware public (`otelhttp.WithPublicEndpoint()`), or the client's `traceparent` still becomes the span's trace, and so flightrec's.
 
 A client can also make its own request slow (by sending the body slowly), which triggers `SlowAfter`: that request's buffer is written, bounded by `MaxPerScope`, and a notice is published within the notifier's rate limits. Set `SlowAfter` above the durations clients can reasonably cause, and watch `Stats().ScopesFlushed`.
 

@@ -271,7 +271,7 @@ func benchParallelRequests(b *testing.B, withNotifier bool) {
 		BufferLeveler: slog.LevelDebug,
 	})
 	if withNotifier {
-		defer rec.StartNotifier(context.Background(), memnotifier.New())()
+		defer rec.StartNotifier(context.Background(), memnotifier.New(), flightrec.WithoutSigning())()
 	}
 	logger := slog.New(rec)
 	b.ReportAllocs()

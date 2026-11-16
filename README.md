@@ -133,11 +133,12 @@ func processJob(ctx context.Context, rec *flightrec.Recorder, jobID string) (err
 
 <p align="center"><img src="docs/media/cross-service.svg" alt="When inventory fails, the Flightrec-Flush header travels back to orders and gateway, and a Redis or NATS notifier reaches services that already finished" width="100%"></p>
 
-When a request fails deep in a call chain, every service that handled it can keep its logs. A response header carries the failure back to callers, and a notifier (Redis or NATS) reaches services that already answered:
+When a request fails deep in a call chain, every service that handled it can keep its logs. A response header carries the failure back to callers, and a notifier (Redis or NATS) reaches services that already answered. Both are off by default; turn them on in services that only your own services call:
 
 ```go
+rec := flightrec.New(flightrec.Options{Next: handler, Retain: 30 * time.Second, TrustRequestTraceIDs: true, EnableFlushMarker: true})
 client := &http.Client{Transport: flightrec.NewTransport(http.DefaultTransport)}
-stop := rec.StartNotifier(ctx, notifier, flightrec.WithSigningKey(key)) // with Options.Retain set
+stop := rec.StartNotifier(ctx, notifier, flightrec.WithSigningKey(key))
 ```
 
 See [docs/cross-service.md](docs/cross-service.md) and [`examples/cross-service`](examples/cross-service).

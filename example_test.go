@@ -24,12 +24,14 @@ import (
 func ExampleNew() {
 	var buf bytes.Buffer
 	rec := flightrec.New(flightrec.Options{
-		Next:          slog.NewJSONHandler(&buf, nil),
-		PassLeveler:   slog.LevelWarn,
-		BufferLeveler: slog.LevelDebug,
-		SlowAfter:     2 * time.Second,
-		MaxPerScope:   256 << 10,
-		MaxTotal:      64 << 20,
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
+		Next:                 slog.NewJSONHandler(&buf, nil),
+		PassLeveler:          slog.LevelWarn,
+		BufferLeveler:        slog.LevelDebug,
+		SlowAfter:            2 * time.Second,
+		MaxPerScope:          256 << 10,
+		MaxTotal:             64 << 20,
 	})
 	logger := slog.New(rec)
 
@@ -122,9 +124,11 @@ func ExampleFlush() {
 func ExampleInvokeGRPCUnary() {
 	var buf bytes.Buffer
 	rec := flightrec.New(flightrec.Options{
-		Next:          slog.NewJSONHandler(&buf, nil),
-		PassLeveler:   slog.LevelWarn,
-		BufferLeveler: slog.LevelDebug,
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
+		Next:                 slog.NewJSONHandler(&buf, nil),
+		PassLeveler:          slog.LevelWarn,
+		BufferLeveler:        slog.LevelDebug,
 	})
 	logger := slog.New(rec)
 
@@ -150,12 +154,12 @@ func ExampleInvokeGRPCUnary() {
 // A service that called a failing service keeps its own logs for the request:
 // the response's Flightrec-Flush header triggers the caller's scope.
 func ExampleNewTransport() {
-	downstream := httptest.NewServer(flightrec.HTTPMiddleware(flightrec.New(flightrec.Options{Next: slog.DiscardHandler}))(
+	downstream := httptest.NewServer(flightrec.HTTPMiddleware(flightrec.New(flightrec.Options{Next: slog.DiscardHandler, TrustRequestTraceIDs: true, EnableFlushMarker: true}))(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })))
 	defer downstream.Close()
 
 	var buf bytes.Buffer
-	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(&buf, nil), BufferLeveler: slog.LevelDebug})
+	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(&buf, nil), BufferLeveler: slog.LevelDebug, TrustRequestTraceIDs: true, EnableFlushMarker: true})
 	client := &http.Client{Transport: flightrec.NewTransport(http.DefaultTransport)}
 
 	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "req-1"})

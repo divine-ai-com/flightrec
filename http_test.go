@@ -24,7 +24,7 @@ func TestScopeSendFlushMarker(t *testing.T) {
 		return func(v string) error { *dst = v; return nil }
 	}
 
-	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
+	rec := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, TrustRequestTraceIDs: true, EnableFlushMarker: true})
 	ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{})
 	var sent string
 	if sc.SendFlushMarker(record(&sent)) || sent != "" {
@@ -49,7 +49,7 @@ func TestScopeSendFlushMarker(t *testing.T) {
 	}
 	sc.End(ctx, 200)
 
-	off := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, DisableFlushMarker: true})
+	off := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, DisableFlushMarker: true, TrustRequestTraceIDs: true, EnableFlushMarker: true})
 	ctx, sc = flightrec.StartScope(context.Background(), off, flightrec.ScopeMeta{})
 	flightrec.Flush(ctx, "x")
 	called := false
@@ -127,9 +127,11 @@ func markerServer(t *testing.T, mk func(log *slog.Logger) http.HandlerFunc) (*fl
 	t.Helper()
 	out := &syncBuffer{}
 	rec := flightrec.New(flightrec.Options{
-		Next:          slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLeveler:   slog.LevelWarn,
-		BufferLeveler: slog.LevelDebug,
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
+		Next:                 slog.NewJSONHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		PassLeveler:          slog.LevelWarn,
+		BufferLeveler:        slog.LevelDebug,
 	})
 	srv := httptest.NewUnstartedServer(flightrec.HTTPMiddleware(rec)(mk(slog.New(rec))))
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0) // the panic case is expected
@@ -367,9 +369,11 @@ func TestFlushMarkerForSlowRequest(t *testing.T) {
 	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
 
 	rec := flightrec.New(flightrec.Options{
-		Next:      slog.NewJSONHandler(io.Discard, nil),
-		SlowAfter: time.Second,
-		Now:       clock,
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
+		Next:                 slog.NewJSONHandler(io.Discard, nil),
+		SlowAfter:            time.Second,
+		Now:                  clock,
 	})
 	srv := httptest.NewServer(flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		advance(2 * time.Second)
@@ -414,9 +418,11 @@ func newService(t *testing.T, handler func(s *service) http.HandlerFunc) *servic
 	t.Helper()
 	s := &service{out: &syncBuffer{}}
 	s.rec = flightrec.New(flightrec.Options{
-		Next:          slog.NewJSONHandler(s.out, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		PassLeveler:   slog.LevelWarn,
-		BufferLeveler: slog.LevelDebug,
+		TrustRequestTraceIDs: true,
+		EnableFlushMarker:    true,
+		Next:                 slog.NewJSONHandler(s.out, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		PassLeveler:          slog.LevelWarn,
+		BufferLeveler:        slog.LevelDebug,
 	})
 	s.log = slog.New(s.rec)
 	s.srv = httptest.NewServer(flightrec.HTTPMiddleware(s.rec)(handler(s)))
