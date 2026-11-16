@@ -3,7 +3,7 @@ module github.com/divine-ai-com/flightrec/notifier/natsnotifier
 go 1.26.0
 
 require (
-	github.com/divine-ai-com/flightrec v0.3.0
+	github.com/divine-ai-com/flightrec v0.6.1-0.20261116065331-d9df1ff2191a
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.55.0
 )

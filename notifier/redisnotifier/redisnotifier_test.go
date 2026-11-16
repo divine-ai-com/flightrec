@@ -165,8 +165,8 @@ func TestCrossServiceFlushOverRedis(t *testing.T) {
 	email := flightrec.New(flightrec.Options{Next: capture, Retain: time.Minute})
 	checkout := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
 	ctx := context.Background()
-	defer email.StartNotifier(ctx, mustNew(t, newClient(t, srv.Addr())))()
-	defer checkout.StartNotifier(ctx, mustNew(t, newClient(t, srv.Addr())))()
+	defer email.StartNotifier(ctx, mustNew(t, newClient(t, srv.Addr())), flightrec.WithoutSigning())()
+	defer checkout.StartNotifier(ctx, mustNew(t, newClient(t, srv.Addr())), flightrec.WithoutSigning())()
 	waitFor(t, "both subscriptions", func() bool {
 		return srv.PubSubNumSub(redisnotifier.DefaultChannel)[redisnotifier.DefaultChannel] == 2
 	})

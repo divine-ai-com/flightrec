@@ -158,8 +158,8 @@ func TestCrossServiceFlushOverNATS(t *testing.T) {
 	checkout := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
 	emailConn, checkoutConn := connect(t, url), connect(t, url)
 	ctx := context.Background()
-	defer email.StartNotifier(ctx, mustNew(t, emailConn))()
-	defer checkout.StartNotifier(ctx, mustNew(t, checkoutConn))()
+	defer email.StartNotifier(ctx, mustNew(t, emailConn), flightrec.WithoutSigning())()
+	defer checkout.StartNotifier(ctx, mustNew(t, checkoutConn), flightrec.WithoutSigning())()
 	waitFor(t, "both subscriptions", func() bool {
 		return emailConn.NumSubscriptions() == 1 && checkoutConn.NumSubscriptions() == 1
 	})
