@@ -166,7 +166,7 @@ Cost of one request that makes 20 log calls with 3 attributes each, on a GitHub 
 | Plain slog, debug logging on (JSON to `io.Discard`) | 675 ns | 0 |
 | flightrec, failed request (buffered, then written) | 1,195 ns | 4 |
 
-Against always-on debug logging, a healthy request costs about 32% less CPU and writes one line; in the bundled demo, flightrec writes 92.5% fewer lines. An [end-to-end test](docs/e2e-report.md) ran three services for 10 minutes at 300 req/s with flat memory. Details, methodology and the tracing numbers: [docs/benchmarks.md](docs/benchmarks.md).
+Against always-on debug logging, a healthy request costs about 32% less CPU and writes one line; in the bundled demo, flightrec writes 94% fewer lines (92.5% fewer bytes). An [end-to-end test](docs/e2e-report.md) ran three services for 10 minutes at 300 req/s with flat memory. Details, methodology and the tracing numbers: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## When to use it
 
