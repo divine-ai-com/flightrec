@@ -5,6 +5,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
 ## [Unreleased]
 
 ### Security
+- `natsnotifier` requires `golang.org/x/crypto` v0.59.0, which includes the fix for GO-2026-5932. Previously the minimum was v0.58.0.
 - `grpcflightrec` requires `golang.org/x/net` v0.62.0, which fixes GO-2026-6866 and GO-2026-6860 in the `html` package. Previously the minimum was v0.60.0.
 
 ## [v0.8.0] - 2026-11-20
