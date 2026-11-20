@@ -209,8 +209,8 @@ Apache-2.0. See [LICENSE](LICENSE).
 <p align="center">
   <a href="https://github.com/haawklabs">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/media/divine-ai-lockup-for-dark-bg.svg">
-      <img src="docs/media/divine-ai-lockup-for-light-bg.svg" alt="divine-ai" width="140">
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/haawklabs-logo-horizontal-reversed.svg">
+      <img src="docs/media/haawklabs-logo-horizontal-color.svg" alt="haawklabs" width="160">
     </picture>
   </a>
 </p>
