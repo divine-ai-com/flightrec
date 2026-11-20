@@ -244,7 +244,7 @@ func TestMiddlewareTraceIDSource(t *testing.T) {
 	}{
 		{"valid header is used", Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}, "req-1041", func(id string) bool { return id == "req-1041" }},
 		{"invalid header is replaced by a generated ID", Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}, "a b c", isGeneratedID},
-		{"IgnoreRequestTraceIDs ignores a valid header", Options{IgnoreRequestTraceIDs: true, TrustRequestTraceIDs: true, EnableFlushMarker: true}, "req-1041", isGeneratedID},
+		{"defaults ignore a valid header", Options{}, "req-1041", isGeneratedID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.opts.Next = slog.NewJSONHandler(io.Discard, nil)
@@ -265,13 +265,13 @@ func TestMiddlewareTraceIDSource(t *testing.T) {
 
 func TestGRPCTraceIDSource(t *testing.T) {
 	st := func(o Options) *recorderState { o.Next = slog.DiscardHandler; return New(o).state }
-	plain, ignore := st(Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}), st(Options{IgnoreRequestTraceIDs: true, TrustRequestTraceIDs: true, EnableFlushMarker: true})
+	plain, ignore := st(Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}), st(Options{})
 	ctx := WithIncomingMetadata(context.Background(), map[string][]string{"x-request-id": {"req-9"}})
 	if got := resolveGRPCTraceID(ctx, plain, nil); got != "req-9" {
 		t.Errorf("metadata trace ID = %q, want req-9", got)
 	}
 	if got := resolveGRPCTraceID(ctx, ignore, nil); got != "" {
-		t.Errorf("with ignore set, trace ID = %q, want empty (generated later)", got)
+		t.Errorf("with default options, trace ID = %q, want empty (generated later)", got)
 	}
 	custom := func(context.Context) string { return "custom-id" }
 	if got := resolveGRPCTraceID(ctx, ignore, custom); got != "" {
@@ -391,13 +391,6 @@ func TestSecureDefaults(t *testing.T) {
 	}
 	if id, m := serve(Options{TrustRequestTraceIDs: true, EnableFlushMarker: true}); id != "client-chosen" || m != "http_502" {
 		t.Errorf("opted in: trace ID %q, marker %q", id, m)
-	}
-	// The deprecated opt-outs still win over the opt-ins.
-	if id, m := serve(Options{TrustRequestTraceIDs: true, EnableFlushMarker: true, IgnoreRequestTraceIDs: true, DisableFlushMarker: true}); id == "client-chosen" || m != "" {
-		t.Errorf("deprecated opt-outs ignored: trace ID %q, marker %q", id, m)
-	}
-	if _, m := serve(Options{DisableFlushMarker: true}); m != "" {
-		t.Errorf("DisableFlushMarker alone: marker %q", m)
 	}
 
 	grpcID := func(o Options) string {

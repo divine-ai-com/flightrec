@@ -100,7 +100,7 @@ func HTTPMiddleware(rec *Recorder) func(http.Handler) http.Handler {
 			// A trace in the context (OpenTelemetry middleware in front)
 			// wins over headers; StartScope takes it from ctx, unless a
 			// parent scope's ID applies.
-			if rec.state.trustRequestIDs() && !rec.state.extractTraceContext(r.Context()).HasTraceID() {
+			if rec.state.opts.TrustRequestTraceIDs && !rec.state.extractTraceContext(r.Context()).HasTraceID() {
 				if traceID = extractHTTPTraceID(r.Header); traceID != "" {
 					source = idHeader
 				}
@@ -207,7 +207,7 @@ func (w *statusResponseWriter) finishPanic() {
 }
 
 func (w *statusResponseWriter) countMissed() {
-	if w.markerSent || !w.scope.state.sendFlushMarkers() {
+	if w.markerSent || !w.scope.state.opts.EnableFlushMarker {
 		return
 	}
 	if triggered, _ := w.scope.TriggerState(); triggered {
@@ -419,7 +419,7 @@ func (t *transport) CloseIdleConnections() {
 // HTTPMiddleware uses it to set FlushHeader. Integrations for other
 // protocols, such as grpcflightrec, call it where they set response metadata.
 func (s *Scope) SendFlushMarker(send func(value string) error) bool {
-	if s == nil || s.state == nil || !s.state.sendFlushMarkers() {
+	if s == nil || s.state == nil || !s.state.opts.EnableFlushMarker {
 		return false
 	}
 	triggered, reason := s.TriggerState()

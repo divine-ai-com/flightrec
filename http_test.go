@@ -49,16 +49,16 @@ func TestScopeSendFlushMarker(t *testing.T) {
 	}
 	sc.End(ctx, 200)
 
-	off := flightrec.New(flightrec.Options{Next: slog.DiscardHandler, DisableFlushMarker: true, TrustRequestTraceIDs: true, EnableFlushMarker: true})
+	off := flightrec.New(flightrec.Options{Next: slog.DiscardHandler})
 	ctx, sc = flightrec.StartScope(context.Background(), off, flightrec.ScopeMeta{})
 	flightrec.Flush(ctx, "x")
 	called := false
 	if sc.SendFlushMarker(func(string) error { called = true; return nil }) || called {
-		t.Error("SendFlushMarker sent with DisableFlushMarker")
+		t.Error("SendFlushMarker sent by default")
 	}
 	sc.End(ctx, 200)
 	if st := off.Stats(); st.FlushMarkersSent != 0 || st.FlushMarkersMissed != 0 {
-		t.Errorf("counters moved with DisableFlushMarker: %+v", st)
+		t.Errorf("counters moved by default: %+v", st)
 	}
 
 	var nilScope *flightrec.Scope
@@ -342,12 +342,9 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestFlushMarkerDisabled(t *testing.T) {
+func TestFlushMarkerOffByDefault(t *testing.T) {
 	out := &syncBuffer{}
-	rec := flightrec.New(flightrec.Options{
-		Next:               slog.NewJSONHandler(out, nil),
-		DisableFlushMarker: true,
-	})
+	rec := flightrec.New(flightrec.Options{Next: slog.NewJSONHandler(out, nil)})
 	srv := httptest.NewServer(flightrec.HTTPMiddleware(rec)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	})))
@@ -355,7 +352,7 @@ func TestFlushMarkerDisabled(t *testing.T) {
 
 	resp := get(t, srv.URL, nil)
 	if got := resp.Header.Get(flightrec.FlushHeader); got != "" {
-		t.Errorf("%s = %q with DisableFlushMarker", flightrec.FlushHeader, got)
+		t.Errorf("%s = %q by default", flightrec.FlushHeader, got)
 	}
 	if st := rec.Stats(); st.FlushMarkersSent != 0 || st.FlushMarkersMissed != 0 || st.ScopesFlushed != 1 {
 		t.Errorf("want the scope flushed without marker counters, got %+v", st)
