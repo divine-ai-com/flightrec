@@ -4,8 +4,13 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+## [v0.9.1, grpcflightrec/v0.5.0, otelflightrec/v0.4.0, notifier/redisnotifier/v0.5.0, notifier/natsnotifier/v0.5.0] - 2026-11-20
+
+**Breaking:** submodule import paths change. Modules released: core `v0.9.1` (go.mod only), `grpcflightrec/v0.5.0`, `otelflightrec/v0.4.0`, `notifier/redisnotifier/v0.5.0` and `notifier/natsnotifier/v0.5.0`.
+
 ### Changed
 - The submodule paths are `github.com/haawklabs/flightrec/grpcflightrec`, `.../otelflightrec`, `.../notifier/redisnotifier` and `.../notifier/natsnotifier`, and each requires core v0.9.0. Their APIs are unchanged.
+- Each module retracts the versions listed before its current path, which cannot be installed under it.
 
 ## [v0.9.0] - 2026-11-20
 
