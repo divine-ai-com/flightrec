@@ -19,8 +19,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/otelflightrec"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/otelflightrec"
 )
 
 type stringer struct{}

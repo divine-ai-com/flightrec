@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/grpcflightrec"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/grpcflightrec"
 )
 
 // lockedBuffer is a concurrency-safe log sink.

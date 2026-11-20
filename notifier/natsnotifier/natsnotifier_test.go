@@ -16,8 +16,8 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/notifier/natsnotifier"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/notifier/natsnotifier"
 )
 
 var _ flightrec.Notifier = (*natsnotifier.Notifier)(nil)

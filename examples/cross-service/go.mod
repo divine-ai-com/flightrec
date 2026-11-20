@@ -1,10 +1,10 @@
-module github.com/divine-ai-com/flightrec/examples/cross-service
+module github.com/haawklabs/flightrec/examples/cross-service
 
 go 1.26.0
 
 require (
-	github.com/divine-ai-com/flightrec v0.8.0
-	github.com/divine-ai-com/flightrec/notifier/redisnotifier v0.3.0
+	github.com/haawklabs/flightrec v0.9.0
+	github.com/haawklabs/flightrec/notifier/redisnotifier v0.5.0
 	github.com/redis/go-redis/v9 v9.23.0
 )
 
@@ -14,4 +14,6 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 )
 
-replace github.com/divine-ai-com/flightrec/notifier/redisnotifier => ../../notifier/redisnotifier
+replace github.com/haawklabs/flightrec/notifier/redisnotifier => ../../notifier/redisnotifier
+
+replace github.com/haawklabs/flightrec => ../..

@@ -15,8 +15,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/notifier/redisnotifier"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/notifier/redisnotifier"
 )
 
 func mustNew(t *testing.T, c redis.UniversalClient, opts ...redisnotifier.Option) *redisnotifier.Notifier {

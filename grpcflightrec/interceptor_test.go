@@ -16,8 +16,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/grpcflightrec"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/grpcflightrec"
 )
 
 func parseLines(t *testing.T, buf *bytes.Buffer) []map[string]any {

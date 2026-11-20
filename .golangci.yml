@@ -61,4 +61,3 @@ formatters:
     goimports:
       local-prefixes:
         - github.com/haawklabs/flightrec
-        - github.com/divine-ai-com/flightrec # until the submodules move

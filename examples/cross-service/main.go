@@ -56,9 +56,9 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/notifier/memnotifier"
-	"github.com/divine-ai-com/flightrec/notifier/redisnotifier"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/notifier/memnotifier"
+	"github.com/haawklabs/flightrec/notifier/redisnotifier"
 )
 
 func main() {

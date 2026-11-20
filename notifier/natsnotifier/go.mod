@@ -1,9 +1,9 @@
-module github.com/divine-ai-com/flightrec/notifier/natsnotifier
+module github.com/haawklabs/flightrec/notifier/natsnotifier
 
 go 1.26.0
 
 require (
-	github.com/divine-ai-com/flightrec v0.8.0
+	github.com/haawklabs/flightrec v0.9.0
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.55.0
 )
@@ -20,3 +20,8 @@ require (
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 )
+
+replace github.com/haawklabs/flightrec => ../..
+
+// Published before this module path; cannot be installed.
+retract [v0.0.0, v0.4.1]

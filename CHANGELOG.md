@@ -4,6 +4,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Changed
+- The submodule paths are `github.com/haawklabs/flightrec/grpcflightrec`, `.../otelflightrec`, `.../notifier/redisnotifier` and `.../notifier/natsnotifier`, and each requires core v0.9.0. Their APIs are unchanged.
+
 ## [v0.9.0] - 2026-11-20
 
 Modules released: core `v0.9.0`.

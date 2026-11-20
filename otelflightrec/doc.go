@@ -3,7 +3,7 @@
 
 // Package otelflightrec integrates flightrec with OpenTelemetry traces and logs.
 //
-// It provides three capabilities while keeping the root github.com/divine-ai-com/flightrec
+// It provides three capabilities while keeping the root github.com/haawklabs/flightrec
 // module free of external dependencies:
 //
 //  1. SpanProcessor (implementing go.opentelemetry.io/otel/sdk/trace.SpanProcessor)

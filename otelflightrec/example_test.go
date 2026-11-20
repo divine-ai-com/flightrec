@@ -13,8 +13,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/otelflightrec"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/otelflightrec"
 )
 
 func ExampleNewSpanProcessor() {
