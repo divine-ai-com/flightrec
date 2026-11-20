@@ -34,7 +34,7 @@ Log volume in the bundled demo, 1,000 requests with 1% failing and 20 debug reco
 
 The [end-to-end test of v0.4.0](e2e-report.md) ran three services for 10 minutes at 300 req/s with flat memory (101 to 106 MB per service) and recovered every in-flight request after `kill -9`.
 
-The demo is synthetic: every record is at Debug level, so the 92.5% reduction follows from the 1% failure rate. All 10 failed requests keep their 20 records in order.
+The demo is synthetic: every record is at Debug level, so the reduction (94% of lines, 92.5% of bytes) follows from the 1% failure rate. All 10 failed requests keep their 20 records in order.
 
 ## Tracing with otelflightrec
 

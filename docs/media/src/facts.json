@@ -1,5 +1,5 @@
 {"proof_sub": "Measured on GitHub runners and in a three-service end-to-end test (docs/e2e-report.md)",
- "tiles": [["92.5%", "fewer log lines in the\n1,000-request demo"],
+ "tiles": [["94%", "fewer log lines in the\n1,000-request demo"],
            ["32%", "less CPU per healthy request\nthan always-on debug logs"],
            ["56%", "less CPU per healthy trace\nthan exporting every span"],
            ["45 / 45", "in-flight requests recovered\nafter kill -9 under load"],
