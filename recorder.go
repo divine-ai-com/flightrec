@@ -122,20 +122,11 @@ func New(opts Options) *Recorder {
 
 	passLeveler := opts.PassLeveler
 	if passLeveler == nil {
-		if opts.PassLevel != 0 {
-			passLeveler = opts.PassLevel
-		} else {
-			passLeveler = slog.LevelWarn
-		}
+		passLeveler = slog.LevelWarn
 	}
-
 	bufferLeveler := opts.BufferLeveler
 	if bufferLeveler == nil {
-		if opts.BufferLevel != 0 {
-			bufferLeveler = opts.BufferLevel
-		} else {
-			bufferLeveler = slog.LevelDebug
-		}
+		bufferLeveler = slog.LevelDebug
 	}
 
 	if opts.MaxPerScope <= 0 {

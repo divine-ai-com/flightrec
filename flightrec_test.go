@@ -723,18 +723,33 @@ func TestLevelFilteringInAndOutOfScope(t *testing.T) {
 }
 
 func TestLevelerOptionsAndDefaults(t *testing.T) {
-	t.Run("setting only BufferLevel defaults PassLevel to Warn", func(t *testing.T) {
+	t.Run("setting only BufferLeveler defaults PassLeveler to Warn", func(t *testing.T) {
 		out := &syncBuffer{}
 		rec := flightrec.New(flightrec.Options{
 			Next:                  slog.NewJSONHandler(out, nil),
-			BufferLevel:           slog.LevelDebug,
+			BufferLeveler:         slog.LevelDebug,
 			DisableHealthySummary: true,
 		})
 		logger := slog.New(rec)
 		ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t6a"})
 		logger.InfoContext(ctx, "info should be buffered, not passed through immediately")
 		if len(out.Lines(t)) != 0 {
-			t.Fatalf("expected Info to be buffered when PassLevel is unset (default Warn), but it was written immediately: %+v", out.Lines(t))
+			t.Fatalf("expected Info to be buffered when PassLeveler is unset (default Warn), but it was written immediately: %+v", out.Lines(t))
+		}
+		sc.End(ctx, 200)
+	})
+
+	t.Run("PassLeveler set to LevelInfo writes Info immediately", func(t *testing.T) {
+		out := &syncBuffer{}
+		rec := flightrec.New(flightrec.Options{
+			Next:                  slog.NewJSONHandler(out, nil),
+			PassLeveler:           slog.LevelInfo,
+			DisableHealthySummary: true,
+		})
+		ctx, sc := flightrec.StartScope(context.Background(), rec, flightrec.ScopeMeta{TraceID: "t6i"})
+		slog.New(rec).InfoContext(ctx, "info passes through")
+		if len(out.Lines(t)) != 1 {
+			t.Fatalf("expected Info written immediately with PassLeveler at Info, got %+v", out.Lines(t))
 		}
 		sc.End(ctx, 200)
 	})
