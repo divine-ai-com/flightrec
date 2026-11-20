@@ -4,6 +4,11 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Removed
+- The deprecated `Options` fields. Each removal is a compile error, not a silent change:
+  - `PassLevel` and `BufferLevel`: use `PassLeveler` and `BufferLeveler`. The old fields ignored `slog.LevelInfo`, their zero value, and used the defaults (Warn and Debug) instead. If you set either to `slog.LevelInfo`, delete the line to keep your behaviour; writing `PassLeveler: slog.LevelInfo` would now take effect.
+  - `IgnoreRequestTraceIDs` and `DisableFlushMarker`: both are the default since v0.7.0. Delete the line. If you also set `TrustRequestTraceIDs` or `EnableFlushMarker`, which the old fields overrode, delete those too.
+
 ## [v0.7.0] - 2026-11-16
 
 Safe defaults: a client can no longer choose trace IDs or learn from responses that an error was logged, and a notifier no longer starts unauthenticated by accident. **Breaking:** internal services that rely on forwarded request IDs or flush markers must opt in, and `StartNotifier` needs a signing option; see the migration note below.

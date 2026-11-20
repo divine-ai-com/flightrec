@@ -40,12 +40,16 @@ The `Submodules build without replace` CI job builds each submodule against the 
    For a submodule, use `git tag -a grpcflightrec/vX.Y.Z -m grpcflightrec/vX.Y.Z`.
 
 5. Create the GitHub release from the tag, using the changelog section as the notes.
-6. Verify the release installs from the module proxy in an empty module:
+6. Verify that the new release builds with the latest release of every other module, from the module proxy, in an empty module:
 
    ```bash
    cd "$(mktemp -d)" && go mod init example.com/check
-   go get github.com/divine-ai-com/flightrec@vX.Y.Z
-   go get github.com/divine-ai-com/flightrec/otelflightrec@vX.Y.Z
+   m=github.com/divine-ai-com/flightrec
+   go get $m@vX.Y.Z $m/grpcflightrec@latest $m/otelflightrec@latest \
+     $m/notifier/redisnotifier@latest $m/notifier/natsnotifier@latest
+   printf 'package main\nimport (\n' > main.go
+   for p in "" /grpcflightrec /otelflightrec /notifier/redisnotifier /notifier/natsnotifier; do echo "_ \"$m$p\"" >> main.go; done
+   printf ')\nfunc main() {}\n' >> main.go
    go build ./...
    ```
 

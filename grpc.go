@@ -161,7 +161,7 @@ func InvokeGRPCStream(
 }
 
 func resolveGRPCTraceID(ctx context.Context, st *recorderState, extractTraceID GRPCMetadataExtractor) string {
-	if !st.trustRequestIDs() {
+	if !st.opts.TrustRequestTraceIDs {
 		// Extractors read incoming metadata, which the client controls.
 		return TraceID(ctx)
 	}

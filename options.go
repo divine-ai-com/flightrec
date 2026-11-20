@@ -36,30 +36,13 @@ type Options struct {
 	Next slog.Handler
 
 	// PassLeveler is the minimum level written immediately to Next without
-	// buffering inside a scope. Takes precedence over PassLevel when non-nil.
-	// Defaults to slog.LevelWarn when both PassLeveler and PassLevel are unset.
+	// buffering inside a scope. Defaults to slog.LevelWarn when nil.
 	PassLeveler slog.Leveler
 
 	// BufferLeveler is the minimum level stored in a request scope's buffer
-	// and emitted only if the scope triggers. Takes precedence over
-	// BufferLevel when non-nil. Defaults to slog.LevelDebug when both
-	// BufferLeveler and BufferLevel are unset.
-	BufferLeveler slog.Leveler
-
-	// PassLevel is the minimum level written immediately to Next without
-	// buffering inside a scope. Defaults to slog.LevelWarn when unset (zero).
-	//
-	// Deprecated: Use PassLeveler instead, which distinguishes slog.LevelInfo
-	// (zero) from an unset value.
-	PassLevel slog.Level
-
-	// BufferLevel is the minimum level stored in a request scope's buffer
 	// and emitted only if the scope triggers. Defaults to slog.LevelDebug
-	// when unset (zero).
-	//
-	// Deprecated: Use BufferLeveler instead, which distinguishes slog.LevelInfo
-	// (zero) from an unset value.
-	BufferLevel slog.Level
+	// when nil.
+	BufferLeveler slog.Leveler
 
 	// SlowAfter triggers a scope flush when a request's total duration
 	// meets or exceeds this threshold. Zero disables slow-request triggering.
@@ -88,16 +71,6 @@ type Options struct {
 	// default, because the marker tells a client that an error was logged.
 	// Set it on services that only your own services call.
 	EnableFlushMarker bool
-
-	// IgnoreRequestTraceIDs overrides TrustRequestTraceIDs.
-	//
-	// Deprecated: request trace IDs are ignored by default since v0.7.0.
-	IgnoreRequestTraceIDs bool
-
-	// DisableFlushMarker overrides EnableFlushMarker.
-	//
-	// Deprecated: flush markers are off by default since v0.7.0.
-	DisableFlushMarker bool
 
 	// Retain keeps the buffer of a healthy scope for this long after the scope
 	// ends, so a failure reported later for the same trace ID can still write
@@ -136,14 +109,4 @@ func (st *recorderState) passLevel() slog.Level {
 
 func (st *recorderState) bufferLevel() slog.Level {
 	return st.bufferLeveler.Level()
-}
-
-// trustRequestIDs reports whether trace IDs may come from request headers.
-func (st *recorderState) trustRequestIDs() bool {
-	return st.opts.TrustRequestTraceIDs && !st.opts.IgnoreRequestTraceIDs
-}
-
-// sendFlushMarkers reports whether responses may carry FlushHeader.
-func (st *recorderState) sendFlushMarkers() bool {
-	return st.opts.EnableFlushMarker && !st.opts.DisableFlushMarker
 }
