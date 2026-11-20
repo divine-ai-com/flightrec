@@ -5,7 +5,7 @@ All notable changes to `flightrec` are documented in this file. This project adh
 ## [Unreleased]
 
 ### Changed
-- The repository moved to [github.com/haawklabs/flightrec](https://github.com/haawklabs/flightrec), and the core module path is now `github.com/haawklabs/flightrec`. Update imports and `go get github.com/haawklabs/flightrec@latest`. The API is unchanged from v0.8.0. Versions up to v0.8.0 stay available under `github.com/divine-ai-com/flightrec`, which gets no further releases. The submodules move in their next releases.
+- The module path is `github.com/haawklabs/flightrec`. The API is unchanged from v0.8.0.
 
 ## [grpcflightrec/v0.4.1, notifier/natsnotifier/v0.4.1] - 2026-11-20
 
@@ -141,7 +141,7 @@ The core module is unchanged at `v0.2.0`.
 ## [v0.2.0] - 2026-11-15
 
 ### Added
-- `otelflightrec` submodule (`github.com/divine-ai-com/flightrec/otelflightrec`) providing `SpanProcessor` (`go.opentelemetry.io/otel/sdk/trace.SpanProcessor`) that buffers finished child spans per trace in bounded memory (`MaxBytesPerTrace`, `MaxTotalBytes`) and exports them only when the trace or its linked `flightrec.Scope` triggers (#18).
+- `otelflightrec` submodule (`github.com/haawklabs/flightrec/otelflightrec`) providing `SpanProcessor` (`go.opentelemetry.io/otel/sdk/trace.SpanProcessor`) that buffers finished child spans per trace in bounded memory (`MaxBytesPerTrace`, `MaxTotalBytes`) and exports them only when the trace or its linked `flightrec.Scope` triggers (#18).
 - Configurable healthy-trace export policies on `otelflightrec.SpanProcessor`: `HealthyExportRootOnly` (default: exports only the local root span annotated with `flightrec.dropped_spans` and discards child spans) and `HealthyExportNone` (exports nothing for healthy traces), plus `flightrec.flush_reason` and `flightrec.truncated` attributes on triggered traces (#19).
 - `otelflightrec.NewLogHandler` (`log/slog.Handler`) bridging `log/slog` and `flightrec.Recorder` to OpenTelemetry Logs (`go.opentelemetry.io/otel/log`) with original timestamps, structured group/attribute mapping, and `slogtest.TestHandler` compliance (#20).
 - Zero-allocation log-time `TraceContext` (`TraceID`, `SpanID`, `TraceFlags`) capture in `flightrec.Recorder`, emitting `flightrec.span_id` on output records when an OpenTelemetry span was active at log time and restoring the log-time `SpanContext` into `ctx` when flushing buffered records to `Next.Handle` (#20).
@@ -155,7 +155,7 @@ The core module is unchanged at `v0.2.0`.
 
 ### Added
 - `Options.PassLeveler` and `Options.BufferLeveler` (`slog.Leveler`) so `BufferLeveler` can be set to `slog.LevelInfo` (`0`) (#7).
-- `grpcflightrec` submodule (`github.com/divine-ai-com/flightrec/grpcflightrec`) providing `UnaryServerInterceptor` and `StreamServerInterceptor` with incoming gRPC metadata trace ID extraction, plus `InvokeGRPCStream`, `WithIncomingMetadata`, and `ExtractTraceIDFromMetadata` in the root package (#10).
+- `grpcflightrec` submodule (`github.com/haawklabs/flightrec/grpcflightrec`) providing `UnaryServerInterceptor` and `StreamServerInterceptor` with incoming gRPC metadata trace ID extraction, plus `InvokeGRPCStream`, `WithIncomingMetadata`, and `ExtractTraceIDFromMetadata` in the root package (#10).
 
 ### Fixed
 - Rebuild a single nested group/attribute tree per record so interleaved `WithGroup` and `WithAttrs` calls never emit duplicate JSON keys or drop attributes; pass `testing/slogtest` out-of-scope, in-scope pass-through, and in-scope buffered-and-flushed (#2).
