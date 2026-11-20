@@ -4,6 +4,12 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+## [v0.8.0] - 2026-11-20
+
+A smaller `Options` before 1.0: the four deprecated fields are gone. **Breaking:** code that sets any of them no longer compiles; the migration for each is below.
+
+Modules released: core `v0.8.0` only. The submodules are unchanged and work with it.
+
 ### Removed
 - The deprecated `Options` fields. Each removal is a compile error, not a silent change:
   - `PassLevel` and `BufferLevel`: use `PassLeveler` and `BufferLeveler`. The old fields ignored `slog.LevelInfo`, their zero value, and used the defaults (Warn and Debug) instead. If you set either to `slog.LevelInfo`, delete the line to keep your behaviour; writing `PassLeveler: slog.LevelInfo` would now take effect.
