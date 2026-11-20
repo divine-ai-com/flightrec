@@ -1,9 +1,9 @@
-module github.com/divine-ai-com/flightrec/grpcflightrec
+module github.com/haawklabs/flightrec/grpcflightrec
 
 go 1.26.0
 
 require (
-	github.com/divine-ai-com/flightrec v0.8.0
+	github.com/haawklabs/flightrec v0.9.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
@@ -16,7 +16,5 @@ require (
 )
 
 // Require core v0.1.0, which lacks APIs these versions call, so they do not compile.
-retract (
-	v0.2.0
-	v0.1.1
-)
+
+replace github.com/haawklabs/flightrec => ../

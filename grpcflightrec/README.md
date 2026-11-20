@@ -1,15 +1,15 @@
 # grpcflightrec
 
-gRPC server and client interceptors for [flightrec](https://github.com/divine-ai-com/flightrec).
+gRPC server and client interceptors for [flightrec](https://github.com/haawklabs/flightrec).
 
 ```bash
-go get github.com/divine-ai-com/flightrec/grpcflightrec
+go get github.com/haawklabs/flightrec/grpcflightrec
 ```
 
-Server interceptors open a scope per RPC, take the trace ID from the request's OpenTelemetry trace if it has one or else from incoming metadata (`traceparent`, `x-trace-id`, `x-request-id`), and set the `flightrec-flush` trailer when the RPC is kept. Client interceptors read that trailer, as `NewTransport` does for HTTP (see [Keep logs across services](https://github.com/divine-ai-com/flightrec/blob/main/docs/cross-service.md)):
+Server interceptors open a scope per RPC, take the trace ID from the request's OpenTelemetry trace if it has one or else from incoming metadata (`traceparent`, `x-trace-id`, `x-request-id`), and set the `flightrec-flush` trailer when the RPC is kept. Client interceptors read that trailer, as `NewTransport` does for HTTP (see [Keep logs across services](https://github.com/haawklabs/flightrec/blob/main/docs/cross-service.md)):
 
 ```go
-import "github.com/divine-ai-com/flightrec/grpcflightrec"
+import "github.com/haawklabs/flightrec/grpcflightrec"
 
 srv := grpc.NewServer(
 	grpc.UnaryInterceptor(grpcflightrec.UnaryServerInterceptor(rec)),

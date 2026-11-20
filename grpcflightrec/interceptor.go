@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/divine-ai-com/flightrec"
+	"github.com/haawklabs/flightrec"
 )
 
 // FlushTrailer is the response trailer a triggered scope sets, the gRPC

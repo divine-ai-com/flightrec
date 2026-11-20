@@ -15,7 +15,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/divine-ai-com/flightrec"
+	"github.com/haawklabs/flightrec"
 )
 
 const (

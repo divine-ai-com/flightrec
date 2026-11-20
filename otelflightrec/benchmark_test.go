@@ -11,7 +11,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/divine-ai-com/flightrec/otelflightrec"
+	"github.com/haawklabs/flightrec/otelflightrec"
 )
 
 // These benchmarks measure processor overhead only: Next is a no-op, so the

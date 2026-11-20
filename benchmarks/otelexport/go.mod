@@ -1,11 +1,11 @@
-module github.com/divine-ai-com/flightrec/benchmarks/otelexport
+module github.com/haawklabs/flightrec/benchmarks/otelexport
 
 go 1.26.0
 
-replace github.com/divine-ai-com/flightrec/otelflightrec => ../../otelflightrec
+replace github.com/haawklabs/flightrec/otelflightrec => ../../otelflightrec
 
 require (
-	github.com/divine-ai-com/flightrec/otelflightrec v0.2.2
+	github.com/haawklabs/flightrec/otelflightrec v0.2.2
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
@@ -14,11 +14,11 @@ require (
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/divine-ai-com/flightrec v0.8.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
+	github.com/haawklabs/flightrec v0.9.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
@@ -33,3 +33,5 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+replace github.com/haawklabs/flightrec => ../..

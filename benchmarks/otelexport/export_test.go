@@ -16,7 +16,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/divine-ai-com/flightrec/otelflightrec"
+	"github.com/haawklabs/flightrec/otelflightrec"
 )
 
 // collector is a local OTLP/HTTP endpoint that counts the bytes it receives.

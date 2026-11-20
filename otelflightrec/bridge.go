@@ -8,7 +8,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/divine-ai-com/flightrec"
+	"github.com/haawklabs/flightrec"
 )
 
 func init() {

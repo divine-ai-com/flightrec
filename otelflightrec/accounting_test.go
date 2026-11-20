@@ -13,7 +13,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/divine-ai-com/flightrec/otelflightrec"
+	"github.com/haawklabs/flightrec/otelflightrec"
 )
 
 var attrKeys = []string{"db.statement", "db.system", "db.name", "db.user"}

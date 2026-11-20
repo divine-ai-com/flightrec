@@ -16,10 +16,10 @@ import (
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/divine-ai-com/flightrec"
+	"github.com/haawklabs/flightrec"
 )
 
-const defaultInstrumentationName = "github.com/divine-ai-com/flightrec/otelflightrec"
+const defaultInstrumentationName = "github.com/haawklabs/flightrec/otelflightrec"
 
 // LogHandlerOptions configures a LogHandler.
 type LogHandlerOptions struct {
@@ -29,7 +29,7 @@ type LogHandlerOptions struct {
 
 	// InstrumentationName is the logger scope name passed to
 	// LoggerProvider.Logger. Defaults to
-	// "github.com/divine-ai-com/flightrec/otelflightrec".
+	// "github.com/haawklabs/flightrec/otelflightrec".
 	InstrumentationName string
 
 	// InstrumentationVersion is the optional version passed to

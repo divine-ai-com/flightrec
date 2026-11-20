@@ -1,9 +1,9 @@
-module github.com/divine-ai-com/flightrec/otelflightrec
+module github.com/haawklabs/flightrec/otelflightrec
 
 go 1.26.0
 
 require (
-	github.com/divine-ai-com/flightrec v0.8.0
+	github.com/haawklabs/flightrec v0.9.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/log v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
@@ -22,4 +22,5 @@ require (
 )
 
 // Requires an invalid version of the core module and cannot be installed.
-retract v0.2.0
+
+replace github.com/haawklabs/flightrec => ../
