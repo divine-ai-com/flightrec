@@ -30,6 +30,7 @@ stop := rec.StartNotifier(ctx, n, flightrec.WithSigningKey(key))
 ```
 
 - Messages are signed with HMAC-SHA256 and a timestamp; unsigned, forged and messages older than two minutes are dropped and counted in `Stats().NotifierRejected`. Use 32 random bytes, not a 32-character password.
+- A captured signed message can be replayed while its timestamp is within two minutes of the receiver's clock, the window allowed for clock skew; there is no nonce cache. A replay only repeats the notices it carries: each service ignores a trace ID it applied in the last 30 seconds (while it tracks fewer than 4096 recent IDs), and remote notices are rate limited to 50 per second with bursts of 100, so the effect is limited to extra flushes of those traces.
 - Signed and unsigned services reject each other's messages, so turn signing on for every service of a channel in one deploy. To rotate keys with rolling deploys, roll out each step everywhere before the next: `WithSigningKey(old, new)`, then `WithSigningKey(new, old)`, then `WithSigningKey(new)`.
 - Give the channel its own credentials, over TLS, read from the environment or a secret store. For Redis, an ACL user limited to the channel; `+ping` is needed for the notifier's health checks:
 
