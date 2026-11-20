@@ -4,6 +4,10 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+## [v0.9.0] - 2026-11-20
+
+Modules released: core `v0.9.0`.
+
 ### Changed
 - The module path is `github.com/haawklabs/flightrec`. The API is unchanged from v0.8.0.
 
