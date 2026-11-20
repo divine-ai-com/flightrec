@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/divine-ai-com/flightrec"
+	"github.com/haawklabs/flightrec"
 )
 
 const (

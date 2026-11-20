@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/divine-ai-com/flightrec/internal/traceid"
+	"github.com/haawklabs/flightrec/internal/traceid"
 )
 
 // GRPCMetadataExtractor extracts a trace ID from a gRPC request context
@@ -21,7 +21,7 @@ import (
 //
 // For ready-to-use grpc.UnaryServerInterceptor and grpc.StreamServerInterceptor
 // implementations that read incoming gRPC metadata directly, see subpackage
-// github.com/divine-ai-com/flightrec/grpcflightrec.
+// github.com/haawklabs/flightrec/grpcflightrec.
 type GRPCMetadataExtractor func(ctx context.Context) string
 
 // GRPCUnaryHandler matches the handler function passed to a gRPC unary

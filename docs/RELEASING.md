@@ -4,11 +4,11 @@ This repository holds several Go modules, each versioned and tagged on its own:
 
 | Module | Path | Tag format |
 | --- | --- | --- |
-| Core | `github.com/divine-ai-com/flightrec` | `vX.Y.Z` |
-| gRPC | `github.com/divine-ai-com/flightrec/grpcflightrec` | `grpcflightrec/vX.Y.Z` |
-| OpenTelemetry | `github.com/divine-ai-com/flightrec/otelflightrec` | `otelflightrec/vX.Y.Z` |
-| Redis notifier | `github.com/divine-ai-com/flightrec/notifier/redisnotifier` | `notifier/redisnotifier/vX.Y.Z` |
-| NATS notifier | `github.com/divine-ai-com/flightrec/notifier/natsnotifier` | `notifier/natsnotifier/vX.Y.Z` |
+| Core | `github.com/haawklabs/flightrec` | `vX.Y.Z` |
+| gRPC | `github.com/haawklabs/flightrec/grpcflightrec` | `grpcflightrec/vX.Y.Z` |
+| OpenTelemetry | `github.com/haawklabs/flightrec/otelflightrec` | `otelflightrec/vX.Y.Z` |
+| Redis notifier | `github.com/haawklabs/flightrec/notifier/redisnotifier` | `notifier/redisnotifier/vX.Y.Z` |
+| NATS notifier | `github.com/haawklabs/flightrec/notifier/natsnotifier` | `notifier/natsnotifier/vX.Y.Z` |
 
 Tags are protected: once pushed, a tag is never moved or deleted. A broken release is fixed with a new patch version and a `retract` directive.
 
@@ -44,7 +44,7 @@ The `Submodules build without replace` CI job builds each submodule against the 
 
    ```bash
    cd "$(mktemp -d)" && go mod init example.com/check
-   m=github.com/divine-ai-com/flightrec
+   m=github.com/haawklabs/flightrec
    go get $m@vX.Y.Z $m/grpcflightrec@latest $m/otelflightrec@latest \
      $m/notifier/redisnotifier@latest $m/notifier/natsnotifier@latest
    printf 'package main\nimport (\n' > main.go

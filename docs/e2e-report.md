@@ -1,6 +1,6 @@
 # End-to-end test of v0.4.0
 
-On 2026-11-15 the released modules were tested together in a three-service system under load: core `v0.4.0`, `grpcflightrec v0.3.0`, `otelflightrec v0.2.2`, `notifier/redisnotifier v0.3.0` and `notifier/natsnotifier v0.3.0`. They were installed from the module proxy, with no `replace` directives. This page records what was run, what held, and what was found. Every bug it found was fixed in [v0.5.0](https://github.com/divine-ai-com/flightrec/releases/tag/v0.5.0).
+On 2026-11-15 the released modules were tested together in a three-service system under load: core `v0.4.0`, `grpcflightrec v0.3.0`, `otelflightrec v0.2.2`, `notifier/redisnotifier v0.3.0` and `notifier/natsnotifier v0.3.0`. They were installed from the module proxy, with no `replace` directives. This page records what was run, what held, and what was found. Every bug it found was fixed in [v0.5.0](https://github.com/haawklabs/flightrec/releases/tag/v0.5.0).
 
 ## Setup
 
@@ -37,11 +37,11 @@ On 2026-11-15 the released modules were tested together in a three-service syste
 
 | Issue | Finding |
 | --- | --- |
-| [#83](https://github.com/divine-ai-com/flightrec/issues/83) | A failure in the service that generated the trace ID never reached the notifier, even when the ID was forwarded |
-| [#84](https://github.com/divine-ai-com/flightrec/issues/84) | A request header trace ID (a proxy's `X-Request-Id`, or a malformed `traceparent`) overrode the active OpenTelemetry span |
-| [#85](https://github.com/divine-ai-com/flightrec/issues/85) | otelflightrec triggered on client span errors such as `NotFound`, which flushed every service for a 404 |
-| [#86](https://github.com/divine-ai-com/flightrec/issues/86) | A failed request that lost every buffered record wrote nothing |
-| [#87](https://github.com/divine-ai-com/flightrec/issues/87) | Crash recovery omitted records too large for the journal without marking the request truncated |
-| [#88](https://github.com/divine-ai-com/flightrec/issues/88) | Stale versions in the quickstart, and limits the README did not state |
+| [#83](https://github.com/haawklabs/flightrec/issues/83) | A failure in the service that generated the trace ID never reached the notifier, even when the ID was forwarded |
+| [#84](https://github.com/haawklabs/flightrec/issues/84) | A request header trace ID (a proxy's `X-Request-Id`, or a malformed `traceparent`) overrode the active OpenTelemetry span |
+| [#85](https://github.com/haawklabs/flightrec/issues/85) | otelflightrec triggered on client span errors such as `NotFound`, which flushed every service for a 404 |
+| [#86](https://github.com/haawklabs/flightrec/issues/86) | A failed request that lost every buffered record wrote nothing |
+| [#87](https://github.com/haawklabs/flightrec/issues/87) | Crash recovery omitted records too large for the journal without marking the request truncated |
+| [#88](https://github.com/haawklabs/flightrec/issues/88) | Stale versions in the quickstart, and limits the README did not state |
 
 Also observed but not confirmed as a flightrec problem: with `SlowAfter` set, a downstream stall of a few seconds makes every in-flight request slow, and writing all of their buffers adds load while the system recovers. Two runs at 400 to 500 req/s did not recover while another job saturated the machine; a replicate recovered.

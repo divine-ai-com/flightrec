@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/divine-ai-com/flightrec/internal/journal"
-	"github.com/divine-ai-com/flightrec/internal/snapshot"
+	"github.com/haawklabs/flightrec/internal/journal"
+	"github.com/haawklabs/flightrec/internal/snapshot"
 )
 
 // Journal size limits.

@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/notifier/memnotifier"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/notifier/memnotifier"
 )
 
 // node is one process connected to a shared notifier.

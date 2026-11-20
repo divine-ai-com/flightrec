@@ -8,7 +8,7 @@ Thanks for your interest in improving flightrec. This guide covers how to propos
 - **Features:** open an issue with the feature request form first, so the design can be agreed before you write code.
 - **Security issues:** do not open a public issue. Follow [SECURITY.md](SECURITY.md).
 
-Issues labeled [`good first issue`](https://github.com/divine-ai-com/flightrec/labels/good%20first%20issue) are a good place to start.
+Issues labeled [`good first issue`](https://github.com/haawklabs/flightrec/labels/good%20first%20issue) are a good place to start.
 
 ## Ground rules
 

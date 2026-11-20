@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/divine-ai-com/flightrec/internal/journal"
+	"github.com/haawklabs/flightrec/internal/journal"
 )
 
 func readJournal(t *testing.T, path string) []journal.Entry {

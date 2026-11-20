@@ -22,7 +22,7 @@ import (
 	"testing/slogtest"
 	"time"
 
-	"github.com/divine-ai-com/flightrec"
+	"github.com/haawklabs/flightrec"
 )
 
 type syncBuffer struct {

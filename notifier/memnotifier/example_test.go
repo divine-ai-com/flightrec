@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/divine-ai-com/flightrec"
-	"github.com/divine-ai-com/flightrec/notifier/memnotifier"
+	"github.com/haawklabs/flightrec"
+	"github.com/haawklabs/flightrec/notifier/memnotifier"
 )
 
 // Two Recorders share a Bus. A failure in "checkout" flushes the logs that

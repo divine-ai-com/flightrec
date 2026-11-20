@@ -2,16 +2,16 @@
 
 **Debug logs for the requests that fail. One line for the ones that don't.**
 
-[![CI](https://github.com/divine-ai-com/flightrec/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/divine-ai-com/flightrec/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/divine-ai-com/flightrec.svg)](https://pkg.go.dev/github.com/divine-ai-com/flightrec)
-[![Release](https://img.shields.io/github/v/release/divine-ai-com/flightrec?sort=semver)](https://github.com/divine-ai-com/flightrec/releases)
+[![CI](https://github.com/haawklabs/flightrec/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/haawklabs/flightrec/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/haawklabs/flightrec.svg)](https://pkg.go.dev/github.com/haawklabs/flightrec)
+[![Release](https://img.shields.io/github/v/release/haawklabs/flightrec?sort=semver)](https://github.com/haawklabs/flightrec/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/divine-ai-com/flightrec/badge)](https://scorecard.dev/viewer/?uri=github.com/divine-ai-com/flightrec)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/haawklabs/flightrec/badge)](https://scorecard.dev/viewer/?uri=github.com/haawklabs/flightrec)
 
 <p align="center">
   <img src="docs/media/walkthrough.svg" alt="flightrec walkthrough: the problem, how per-request buffering works, cross-service flush, crash recovery and OpenTelemetry spans" width="100%">
   <br>
-  <sub>A 106-second walkthrough that loops. Also available as a <a href="https://github.com/divine-ai-com/flightrec/releases/download/v0.5.0/walkthrough.webm">video file</a>; generated from <a href="docs/media/src">docs/media/src</a>.</sub>
+  <sub>A 106-second walkthrough that loops. Also available as a <a href="https://github.com/haawklabs/flightrec/releases/download/v0.5.0/walkthrough.webm">video file</a>; generated from <a href="docs/media/src">docs/media/src</a>.</sub>
 </p>
 
 flightrec is a handler for Go's `log/slog` that works like an aircraft flight recorder. It records every request's debug and info logs in memory and writes them out only when that request fails or runs slowly. A healthy request leaves one summary line.
@@ -47,7 +47,7 @@ flightrec wraps the `slog.Handler` you already use, so existing log calls, forma
 ## Install
 
 ```bash
-go get github.com/divine-ai-com/flightrec
+go get github.com/haawklabs/flightrec
 ```
 
 Requires Go 1.26 or later.
@@ -63,7 +63,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/divine-ai-com/flightrec"
+	"github.com/haawklabs/flightrec"
 )
 
 func main() {
@@ -192,7 +192,7 @@ flightrec follows semantic versioning. Before 1.0, a minor release may change th
 
 ## Documentation
 
-- [API reference](https://pkg.go.dev/github.com/divine-ai-com/flightrec)
+- [API reference](https://pkg.go.dev/github.com/haawklabs/flightrec)
 - [Reference: options, trace IDs, log attributes, flush reasons, limits](docs/reference.md)
 - [Keep logs across services](docs/cross-service.md) and [Survive a hard kill](docs/crash-recovery.md)
 - [Running flightrec safely](docs/security.md): public-facing services, notifier authentication, sensitive data
@@ -207,7 +207,7 @@ See [CONTRIBUTING.md](.github/CONTRIBUTING.md). To report a vulnerability, follo
 Apache-2.0. See [LICENSE](LICENSE).
 
 <p align="center">
-  <a href="https://github.com/divine-ai-com">
+  <a href="https://github.com/haawklabs">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/media/divine-ai-lockup-for-dark-bg.svg">
       <img src="docs/media/divine-ai-lockup-for-light-bg.svg" alt="divine-ai" width="140">

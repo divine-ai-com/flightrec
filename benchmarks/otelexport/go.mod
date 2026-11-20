@@ -2,10 +2,7 @@ module github.com/divine-ai-com/flightrec/benchmarks/otelexport
 
 go 1.26.0
 
-replace (
-	github.com/divine-ai-com/flightrec => ../..
-	github.com/divine-ai-com/flightrec/otelflightrec => ../../otelflightrec
-)
+replace github.com/divine-ai-com/flightrec/otelflightrec => ../../otelflightrec
 
 require (
 	github.com/divine-ai-com/flightrec/otelflightrec v0.2.2
@@ -17,7 +14,7 @@ require (
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/divine-ai-com/flightrec v0.2.0 // indirect
+	github.com/divine-ai-com/flightrec v0.8.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect

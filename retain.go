@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/divine-ai-com/flightrec/internal/snapshot"
+	"github.com/haawklabs/flightrec/internal/snapshot"
 )
 
 // maxRetainedPerTrace limits how many retained scopes one trace ID can hold,

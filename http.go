@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/divine-ai-com/flightrec/internal/traceid"
+	"github.com/haawklabs/flightrec/internal/traceid"
 )
 
 // FlushHeader is the response header a triggered scope sets so that callers

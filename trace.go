@@ -79,7 +79,7 @@ var defaultTraceBridge atomic.Pointer[traceBridgePair]
 
 // RegisterDefaultTraceBridge registers the process-wide default TraceExtractor
 // and TraceInjector used when Options.TraceExtractor or Options.TraceInjector
-// are not set explicitly. Importing github.com/divine-ai-com/flightrec/otelflightrec
+// are not set explicitly. Importing github.com/haawklabs/flightrec/otelflightrec
 // registers an OpenTelemetry bridge automatically.
 func RegisterDefaultTraceBridge(extract TraceExtractor, inject TraceInjector) {
 	defaultTraceBridge.Store(&traceBridgePair{

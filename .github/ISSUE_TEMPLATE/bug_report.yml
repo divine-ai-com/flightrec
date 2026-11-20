@@ -6,13 +6,13 @@ body:
     attributes:
       value: |
         Thanks for taking the time to report this. To report a security vulnerability, use the
-        [private reporting form](https://github.com/divine-ai-com/flightrec/security/advisories/new) instead.
+        [private reporting form](https://github.com/haawklabs/flightrec/security/advisories/new) instead.
   - type: input
     id: version
     attributes:
       label: flightrec version
-      description: Output of `go list -m github.com/divine-ai-com/flightrec`, plus the submodule version if you use one.
-      placeholder: github.com/divine-ai-com/flightrec v0.2.0
+      description: Output of `go list -m github.com/haawklabs/flightrec`, plus the submodule version if you use one.
+      placeholder: github.com/haawklabs/flightrec v0.2.0
     validations:
       required: true
   - type: input

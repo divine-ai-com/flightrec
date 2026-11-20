@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/divine-ai-com/flightrec"
+	"github.com/haawklabs/flightrec"
 )
 
 func TestScopeSendFlushMarker(t *testing.T) {

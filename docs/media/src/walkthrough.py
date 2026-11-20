@@ -131,8 +131,8 @@ def outro(d, dur):
     text(d, 640, 250, "flightrec", 80, "#f8fafc", weight="800")
     d.add("</g>")
     d.add(f'<g class="{d.show(1.0)}" filter="url(#soft)"><rect x="300" y="310" width="680" height="70" rx="14" fill="{C["term"]}" stroke="{C["green"]}" stroke-width="3"/></g>')
-    text(d, 640, 354, "go get github.com/divine-ai-com/flightrec", 24, C["lime"], weight="700", cls=d.show(1.2), mono=True)
-    text(d, 640, 440, "github.com/divine-ai-com/flightrec", 24, "#e2e8f0", weight="600", cls=d.show(2.0))
+    text(d, 640, 354, "go get github.com/haawklabs/flightrec", 24, C["lime"], weight="700", cls=d.show(1.2), mono=True)
+    text(d, 640, 440, "github.com/haawklabs/flightrec", 24, "#e2e8f0", weight="600", cls=d.show(2.0))
     text(d, 640, 480, "Apache-2.0 · Go 1.26+ · journal on Linux, macOS and the BSDs", 18, "#94a3b8", cls=d.show(2.4))
 
 
