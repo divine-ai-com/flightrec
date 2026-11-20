@@ -15,6 +15,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 
-// Require core v0.1.0, which lacks APIs these versions call, so they do not compile.
+// Published before this module path; cannot be installed.
+retract [v0.0.0, v0.4.1]
 
 replace github.com/haawklabs/flightrec => ../

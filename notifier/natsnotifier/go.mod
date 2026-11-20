@@ -22,3 +22,6 @@ require (
 )
 
 replace github.com/haawklabs/flightrec => ../..
+
+// Published before this module path; cannot be installed.
+retract [v0.0.0, v0.4.1]

@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/haawklabs/flightrec v0.9.0
-	github.com/haawklabs/flightrec/notifier/redisnotifier v0.3.0
+	github.com/haawklabs/flightrec/notifier/redisnotifier v0.5.0
 	github.com/redis/go-redis/v9 v9.23.0
 )
 

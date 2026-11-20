@@ -21,6 +21,7 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 )
 
-// Requires an invalid version of the core module and cannot be installed.
+// Published before this module path; cannot be installed.
+retract [v0.0.0, v0.3.1]
 
 replace github.com/haawklabs/flightrec => ../
