@@ -4,6 +4,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Security
+- `grpcflightrec` requires `golang.org/x/net` v0.62.0, which fixes GO-2026-6866 and GO-2026-6860 in the `html` package. Previously the minimum was v0.60.0.
+
 ## [v0.8.0] - 2026-11-20
 
 A smaller `Options` before 1.0: the four deprecated fields are gone. **Breaking:** code that sets any of them no longer compiles; the migration for each is below.
