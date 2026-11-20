@@ -40,7 +40,7 @@ The `Submodules build without replace` CI job builds each submodule against the 
    For a submodule, use `git tag -a grpcflightrec/vX.Y.Z -m grpcflightrec/vX.Y.Z`.
 
 5. Create the GitHub release from the tag, using the changelog section as the notes.
-6. Verify that the new release builds with the latest release of every other module, from the module proxy, in an empty module:
+6. Verify that the new release builds with the latest release of every other module, from the module proxy, in an empty module. Put the module you released at `@vX.Y.Z` and the others at `@latest`:
 
    ```bash
    cd "$(mktemp -d)" && go mod init example.com/check
