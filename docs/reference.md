@@ -1,6 +1,6 @@
 # Reference
 
-Options, trace ID rules, log attributes, flush reasons and limits. The API itself is documented on [pkg.go.dev](https://pkg.go.dev/github.com/divine-ai-com/flightrec).
+Options, trace ID rules, log attributes, flush reasons and limits. The API itself is documented on [pkg.go.dev](https://pkg.go.dev/github.com/haawklabs/flightrec).
 
 ## Choose what is buffered
 
@@ -11,7 +11,7 @@ Options, trace ID rules, log attributes, flush reasons and limits. The API itsel
 | `SlowAfter` | off | Requests that take this long or longer are kept |
 | `DisableHealthySummary` | `false` | Turns off the summary line for healthy requests |
 
-Set both levels explicitly, as in the quick start. Outside a scope, records are delegated to `Next.Enabled` and `Next.Handle` unchanged; inside a scope, flushed records bypass `Next`'s level so debug detail for failed requests is never lost (see [Level Filtering](https://pkg.go.dev/github.com/divine-ai-com/flightrec#hdr-Level_Filtering)).
+Set both levels explicitly, as in the quick start. Outside a scope, records are delegated to `Next.Enabled` and `Next.Handle` unchanged; inside a scope, flushed records bypass `Next`'s level so debug detail for failed requests is never lost (see [Level Filtering](https://pkg.go.dev/github.com/haawklabs/flightrec#hdr-Level_Filtering)).
 
 ## Limit memory
 

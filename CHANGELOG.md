@@ -4,6 +4,9 @@ All notable changes to `flightrec` are documented in this file. This project adh
 
 ## [Unreleased]
 
+### Changed
+- The repository moved to [github.com/haawklabs/flightrec](https://github.com/haawklabs/flightrec), and the core module path is now `github.com/haawklabs/flightrec`. Update imports and `go get github.com/haawklabs/flightrec@latest`. The API is unchanged from v0.8.0. Versions up to v0.8.0 stay available under `github.com/divine-ai-com/flightrec`, which gets no further releases. The submodules move in their next releases.
+
 ## [grpcflightrec/v0.4.1, notifier/natsnotifier/v0.4.1] - 2026-11-20
 
 Modules released: `grpcflightrec/v0.4.1` and `notifier/natsnotifier/v0.4.1`, each requiring core `v0.7.0`. The core module is unchanged at `v0.8.0`.

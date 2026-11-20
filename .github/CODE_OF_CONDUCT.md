@@ -61,7 +61,7 @@ representative at an online or offline event.
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement by opening a
 private report through the repository's
-[security advisory form](https://github.com/divine-ai-com/flightrec/security/advisories/new)
+[security advisory form](https://github.com/haawklabs/flightrec/security/advisories/new)
 with "Code of Conduct" in the title, or through GitHub's
 [Report content](https://docs.github.com/en/communities/maintaining-your-safety-on-github/reporting-abuse-or-spam)
 feature. All complaints will be reviewed and investigated promptly and fairly.

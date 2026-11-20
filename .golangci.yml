@@ -60,4 +60,5 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/divine-ai-com/flightrec
+        - github.com/haawklabs/flightrec
+        - github.com/divine-ai-com/flightrec # until the submodules move

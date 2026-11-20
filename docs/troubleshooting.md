@@ -3,7 +3,7 @@
 ## 1. Buffered `DEBUG` logs are not appearing when expected
 
 **Causes & Fixes:**
-- **Missing request context:** Ensure log calls inside handlers pass the request context (`slog.DebugContext(r.Context(), "msg")`). Calling `slog.Debug("msg")` without `ctx` has no request scope and is delegated directly to `Options.Next` (see the package [Level Filtering](https://pkg.go.dev/github.com/divine-ai-com/flightrec#hdr-Level_Filtering) docs).
+- **Missing request context:** Ensure log calls inside handlers pass the request context (`slog.DebugContext(r.Context(), "msg")`). Calling `slog.Debug("msg")` without `ctx` has no request scope and is delegated directly to `Options.Next` (see the package [Level Filtering](https://pkg.go.dev/github.com/haawklabs/flightrec#hdr-Level_Filtering) docs).
 - **`BufferLeveler` set above `slog.LevelDebug`:** If `Options.BufferLeveler` is set to `slog.LevelInfo`, `DEBUG` records are ignored. Leave `BufferLeveler` unset or set it to `slog.LevelDebug`. When a scope triggers, `flightrec` flushes buffered records directly through `Options.Next.Handle` regardless of `Options.Next`'s own level, so `Options.Next` does not need `Level: slog.LevelDebug` for flushed records to appear.
 - **Request did not trigger:** Verify that the request logged an `ERROR`, returned HTTP `>= 500` (or a gRPC server-fault code), exceeded `Options.SlowAfter`, or called `flightrec.Flush(ctx, "reason")`.
 

@@ -150,7 +150,7 @@ jobs:
         env:
           GOFLAGS: -mod=mod
         run: |
-          go mod edit -dropreplace=github.com/divine-ai-com/flightrec
+          go mod edit -dropreplace=github.com/haawklabs/flightrec
           go build ./...
           go vet ./...
 

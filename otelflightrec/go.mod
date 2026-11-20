@@ -2,10 +2,8 @@ module github.com/divine-ai-com/flightrec/otelflightrec
 
 go 1.26.0
 
-replace github.com/divine-ai-com/flightrec => ../
-
 require (
-	github.com/divine-ai-com/flightrec v0.2.0
+	github.com/divine-ai-com/flightrec v0.8.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/log v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0

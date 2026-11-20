@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/divine-ai-com/flightrec/internal/traceid"
+	"github.com/haawklabs/flightrec/internal/traceid"
 )
 
 type scopeContextKey struct{}

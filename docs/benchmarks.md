@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured on `main` at 010c339 (the code released as v0.3.0) by the [Benchmarks workflow](https://github.com/divine-ai-com/flightrec/actions/runs/43714183457) on a GitHub Actions runner (AMD EPYC 9V74, 4 vCPU, linux/amd64, Go 1.27.4): 10 alternating runs, benchstat medians. Absolute numbers depend on the machine; the ratios are what carry over. Reproduce locally with:
+Measured on `main` at 010c339 (the code released as v0.3.0) by the [Benchmarks workflow](https://github.com/haawklabs/flightrec/actions/runs/43714183457) on a GitHub Actions runner (AMD EPYC 9V74, 4 vCPU, linux/amd64, Go 1.27.4): 10 alternating runs, benchstat medians. Absolute numbers depend on the machine; the ratios are what carry over. Reproduce locally with:
 
 ```bash
 go test -bench=. -benchmem -run='^$' . && go run ./examples/demo   # from the repository root
@@ -38,7 +38,7 @@ The demo is synthetic: every record is at Debug level, so the reduction (94% of 
 
 ## Tracing with otelflightrec
 
-A trace of one root span and ten child spans, through `BatchSpanProcessor` and the OTLP/HTTP exporter (protobuf, no compression) to a local server. Measured by the Benchmarks workflow on a GitHub Actions runner ([run](https://github.com/divine-ai-com/flightrec/actions/runs/43732735249): AMD EPYC 7763, 4 vCPU, Go 1.27.4), 10 runs, benchstat medians. CPU is the process's CPU time per trace across all threads, export included; wall time is lower because the exporter runs on other cores:
+A trace of one root span and ten child spans, through `BatchSpanProcessor` and the OTLP/HTTP exporter (protobuf, no compression) to a local server. Measured by the Benchmarks workflow on a GitHub Actions runner ([run](https://github.com/haawklabs/flightrec/actions/runs/43732735249): AMD EPYC 7763, 4 vCPU, Go 1.27.4), 10 runs, benchstat medians. CPU is the process's CPU time per trace across all threads, export included; wall time is lower because the exporter runs on other cores:
 
 | Path | CPU per trace | Wall time per trace | Spans exported | Bytes exported |
 | --- | ---: | ---: | ---: | ---: |
@@ -49,4 +49,4 @@ A trace of one root span and ten child spans, through `BatchSpanProcessor` and t
 
 A healthy trace uses 56% less CPU than exporting it and sends 94% fewer bytes; a failed trace uses 26% more, since its spans are buffered before they are exported and carry the flush attributes. With a share `f` of traces failing, the default policy costs about `35 + 65f` µs against 79.5 µs, so it saves CPU while fewer than about two thirds of traces fail. The baseline exports every span; against head sampling, which drops whole traces at random, the saving is smaller, but sampling also drops the traces that fail.
 
-Against a no-op exporter, which measures the processor alone, flightrec adds 3 to 4 µs per trace ([run](https://github.com/divine-ai-com/flightrec/actions/runs/43732004424): 6.2 µs plain, 9.5 µs healthy, 10.4 µs failed); that work pays for itself only when export is real. Reproduce with `cd benchmarks/otelexport && go test -bench=. -benchmem -run='^$'`.
+Against a no-op exporter, which measures the processor alone, flightrec adds 3 to 4 µs per trace ([run](https://github.com/haawklabs/flightrec/actions/runs/43732004424): 6.2 µs plain, 9.5 µs healthy, 10.4 µs failed); that work pays for itself only when export is real. Reproduce with `cd benchmarks/otelexport && go test -bench=. -benchmem -run='^$'`.

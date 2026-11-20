@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/divine-ai-com/flightrec/security/advisories/new
+    url: https://github.com/haawklabs/flightrec/security/advisories/new
     about: Report vulnerabilities privately, not as a public issue.
   - name: Documentation
-    url: https://pkg.go.dev/github.com/divine-ai-com/flightrec
+    url: https://pkg.go.dev/github.com/haawklabs/flightrec
     about: API reference and runnable examples.

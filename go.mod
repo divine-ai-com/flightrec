@@ -1,3 +1,3 @@
-module github.com/divine-ai-com/flightrec
+module github.com/haawklabs/flightrec
 
 go 1.26

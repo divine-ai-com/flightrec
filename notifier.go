@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/divine-ai-com/flightrec/internal/notify"
-	"github.com/divine-ai-com/flightrec/internal/traceid"
+	"github.com/haawklabs/flightrec/internal/notify"
+	"github.com/haawklabs/flightrec/internal/traceid"
 )
 
 // Notifier carries flush notices between processes, so that a failure in one
